@@ -95,7 +95,13 @@ class EntryRuleEngine:
         vix: float,
         news_sentiment: dict,
     ) -> Optional[dict]:
-        sell_cfg = cfg.get("option_selling", self.config.get("option_selling", {}))
+        sell_cfg = dict(self.config.get("option_selling", {}))
+        # Per-instrument selling overrides (e.g. crude is more volatile than indices)
+        inst_override = (
+            self.config.get("instruments", {}).get(instrument, {}).get("option_selling", {})
+        )
+        if inst_override:
+            sell_cfg.update(inst_override)
         if not sell_cfg.get("enabled", True):
             return None
 

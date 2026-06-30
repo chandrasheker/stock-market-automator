@@ -45,8 +45,13 @@ instruments:
     actions:
       buy_ce: false
       buy_pe: false
-      sell_ce: false
-      sell_pe: false
+      sell_ce: true
+      sell_pe: true
+    # Crude is more volatile than indices — looser ADX, ATR-based vol gate,
+    # and India VIX is irrelevant here (handled in code).
+    option_selling:
+      max_adx: 28
+      min_atr_pct: 0.015
 
 strategies:
   momentum_breakout:

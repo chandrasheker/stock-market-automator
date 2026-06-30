@@ -195,6 +195,24 @@ class SignalEngine:
         sells = self._scan_sell_opportunities(instrument_key)
         return sells[0] if sells else None
 
+    @staticmethod
+    def _days_to_expiry(chain_df) -> float:
+        """Real calendar days to the chain's nearest expiry (min 1, default 7)."""
+        from src.utils.clock import ist_today
+
+        if chain_df is None or chain_df.empty or "expiry" not in chain_df.columns:
+            return 7.0
+        raw = chain_df["expiry"].iloc[0]
+        if not raw:
+            return 7.0
+        for fmt in ("%d-%b-%Y", "%d-%b-%Y %H:%M:%S", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                exp = datetime.strptime(str(raw), fmt).date()
+                return max(1.0, float((exp - ist_today()).days))
+            except (ValueError, TypeError):
+                continue
+        return 7.0
+
     def get_trade_ideas(
         self, include_buy: bool = False, min_edge: float = 45.0
     ) -> list[TradeOpportunity]:
@@ -292,10 +310,12 @@ class SignalEngine:
         if not underlying:
             underlying = float(df["close"].iloc[-1])
         otm = 2 if trade_mode == "SELL_OPTION" else 1
+        dte_years = self._days_to_expiry(chain_df) / 365.0
         strike_info = self.options.select_strike(
             chain_df, direction, underlying,
             otm_distance=otm,
             trade_mode=trade_mode,
+            days_to_expiry=dte_years,
         )
         if not strike_info:
             return None

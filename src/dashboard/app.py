@@ -211,16 +211,18 @@ def show_option_chain(config):
         "crude_oil": "CRUDE OIL",
     }
     toggles = load_toggles()
-    enabled_insts = [k for k, v in toggles.items() if v.get("enabled", True)]
-    if not enabled_insts:
-        st.warning("All instruments are OFF. Enable at least one in Settings.")
-        return
+    # Viewing a chain is always allowed (independent of the trading toggle)
+    all_insts = [k for k in inst_labels if k in get_yaml_config().get("instruments", {})]
 
     instrument = st.selectbox(
         "Instrument",
-        enabled_insts,
-        format_func=lambda x: inst_labels.get(x, x),
+        all_insts,
+        format_func=lambda x: inst_labels.get(x, x)
+        + ("" if toggles.get(x, {}).get("enabled", True) else "  (trading OFF)"),
     )
+    if not toggles.get(instrument, {}).get("enabled", True):
+        st.info(f"{inst_labels[instrument]} is OFF for trading — you can still view its chain. "
+                "Enable it in Settings to let the bot trade it.")
 
     # Auto-refresh (no manual click needed)
     count = st_autorefresh(interval=refresh_sec * 1000, key=f"chain_{instrument}")
@@ -265,9 +267,13 @@ def show_option_chain(config):
         else:
             st.warning(detail)
         if instrument == "sensex":
-            st.caption("SENSEX options trade on BSE (BFO) — Kite login is required.")
+            st.caption("SENSEX options trade on BSE (BFO) — needs Kite login + BFO segment.")
         elif instrument == "crude_oil":
-            st.caption("Crude Oil options are on MCX — Kite login is required.")
+            st.caption(
+                "Crude Oil options are on **MCX** (9 AM–11:30 PM IST). This needs Kite login "
+                "**and the MCX (commodity) segment enabled** on your Zerodha account. "
+                "If you just enabled MCX, it can take a day to activate."
+            )
         return
 
     m1, m2, m3, m4, m5, m6 = st.columns(6)

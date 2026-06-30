@@ -45,8 +45,14 @@ Only instruments **enabled** in Settings are scanned (NIFTY 50, SENSEX, Crude Oi
 ### Step 4 — Pick the strike (delta-based)
 1. **SELL** → target delta **0.15–0.25** (OTM, safer premium collection)
 2. **BUY** → target delta **0.30–0.50** (directional with reasonable premium)
-3. Fallback: fixed OTM distance if IV/delta unavailable
-4. **Liquidity gate** — reject if spread > 1%, OI too low, or LTP < ₹15
+3. Delta is computed with the **real days-to-expiry** from the live chain, so
+   strike choice adapts as expiry approaches
+4. Fallback: fixed OTM distance if IV/delta unavailable
+5. **Liquidity gate** — reject if spread > 1%, OI too low, or LTP < ₹15
+
+> **Crude Oil (MCX):** more volatile than indices, so it uses looser ADX and an
+> ATR-based volatility gate (India VIX is ignored for commodities). MCX hours are
+> 9 AM–11:30 PM IST and require the MCX segment enabled on your Zerodha account.
 
 ### Step 5 — Cost gate
 Trade only runs if **gross profit at target ≥ 2× all charges** (STT, GST, brokerage, etc.)

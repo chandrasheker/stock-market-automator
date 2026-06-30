@@ -262,13 +262,34 @@ class LiveOptionChainService:
                 i for i in instruments
                 if i.get("name") == underlying and i.get("instrument_type") in ("CE", "PE")
             ]
+            # Fallback: some segments (e.g. MCX) populate name differently —
+            # match on tradingsymbol prefix as a backup.
             if not opts:
-                logger.warning(f"No options found for {underlying} on {exchange}")
+                opts = [
+                    i for i in instruments
+                    if i.get("instrument_type") in ("CE", "PE")
+                    and str(i.get("tradingsymbol", "")).upper().startswith(underlying.upper())
+                ]
+            if not opts:
+                logger.warning(
+                    f"No options found for {underlying} on {exchange}. "
+                    f"Check that the {exchange} segment is enabled on your Kite subscription."
+                )
                 return {}
 
-            expiries = sorted(set(i["expiry"] for i in opts))
+            # Nearest expiry that hasn't passed (in IST)
+            from src.utils.clock import ist_today
+            today = ist_today()
+            future_expiries = sorted(
+                e for e in set(i["expiry"] for i in opts)
+                if not hasattr(e, "year") or e >= today
+            )
+            expiries = future_expiries or sorted(set(i["expiry"] for i in opts))
             nearest = expiries[0]
             opts = [i for i in opts if i["expiry"] == nearest]
+            logger.debug(
+                f"{instrument_key}: {len(opts)} options on {exchange}, nearest expiry {nearest}"
+            )
 
             spot = self._fetch_spot(kite, instrument_key, meta, exchange, instruments, underlying)
             if spot > 0:
