@@ -54,6 +54,9 @@ def main():
     )
 
     st.sidebar.divider()
+    profit_mode = config.get("profit_mode", {}).get("enabled", False)
+    if profit_mode:
+        st.sidebar.success("Profit Mode: SELL premium only")
     mode_color = "🟢" if env.trading_mode == "paper" else "🔴"
     st.sidebar.markdown(f"**Mode:** {mode_color} {env.trading_mode.upper()}")
     st.sidebar.markdown(f"**Capital:** ₹{env.capital:,.0f}")

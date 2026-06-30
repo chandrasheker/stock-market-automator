@@ -47,8 +47,16 @@ class RiskManager:
             if not allowed:
                 return False, reason
 
-        if opportunity.confidence < 0.65:
+        profit_cfg = self.config.get("profit_mode", {})
+        min_conf = profit_cfg.get("min_sell_confidence", 0.70) if opportunity.trade_mode == "SELL_OPTION" else 0.65
+        if opportunity.confidence < min_conf:
             return False, f"Confidence too low: {opportunity.confidence:.2f}"
+
+        if profit_cfg.get("enabled"):
+            max_daily = profit_cfg.get("max_trades_per_day", 2)
+            today_trades = self._count_today_trades()
+            if today_trades >= max_daily:
+                return False, f"Daily trade limit reached ({today_trades}/{max_daily})"
 
         exchange = self.config["instruments"][opportunity.instrument].get("exchange", "NFO")
         approved, cost_info = self.costs.is_trade_worth_it(
@@ -147,6 +155,16 @@ class RiskManager:
         db = get_session()
         try:
             return db.query(Trade).filter_by(status="OPEN").count()
+        finally:
+            db.close()
+
+    def _count_today_trades(self) -> int:
+        db = get_session()
+        try:
+            today = date.today()
+            return db.query(Trade).filter(
+                Trade.entry_time >= datetime(today.year, today.month, today.day)
+            ).count()
         finally:
             db.close()
 

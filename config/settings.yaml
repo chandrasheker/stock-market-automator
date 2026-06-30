@@ -1,5 +1,15 @@
 # Personal Options Trading Automator Configuration
 
+# Profit-first mode: backtest showed BUY options lose money on NIFTY/SENSEX.
+# Selling OTM premium in range-bound markets is the profitable edge.
+profit_mode:
+  enabled: true
+  sell_only_default: true          # disable buy CE/PE unless strong trend
+  buy_min_adx: 28                # only buy when trend is very strong
+  buy_min_confirms: 4
+  max_trades_per_day: 2
+  min_sell_confidence: 0.70
+
 instruments:
   nifty50:
     exchange: NFO
@@ -9,8 +19,8 @@ instruments:
     strike_interval: 50
     enabled: true
     actions:
-      buy_ce: true
-      buy_pe: true
+      buy_ce: false
+      buy_pe: false
       sell_ce: true
       sell_pe: true
   sensex:
@@ -21,8 +31,8 @@ instruments:
     strike_interval: 100
     enabled: true
     actions:
-      buy_ce: true
-      buy_pe: true
+      buy_ce: false
+      buy_pe: false
       sell_ce: true
       sell_pe: true
   crude_oil:
@@ -33,10 +43,10 @@ instruments:
     strike_interval: 50
     enabled: false
     actions:
-      buy_ce: true
-      buy_pe: true
-      sell_ce: true
-      sell_pe: true
+      buy_ce: false
+      buy_pe: false
+      sell_ce: false
+      sell_pe: false
 
 strategies:
   momentum_breakout:

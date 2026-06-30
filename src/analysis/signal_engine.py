@@ -82,6 +82,8 @@ class SignalEngine:
         self.min_confidence = self.config.get("backtest", {}).get("defaults", {}).get(
             "min_confidence", 0.65
         )
+        profit_cfg = self.config.get("profit_mode", {})
+        self.min_sell_confidence = profit_cfg.get("min_sell_confidence", 0.70)
 
     def scan_all(self) -> list[TradeOpportunity]:
         opportunities = []
@@ -90,7 +92,10 @@ class SignalEngine:
                 continue
             try:
                 opp = self.scan_instrument(instrument_key)
-                if opp and opp.confidence >= self.min_confidence:
+                if not opp:
+                    continue
+                min_conf = self.min_sell_confidence if opp.trade_mode == "SELL_OPTION" else self.min_confidence
+                if opp.confidence >= min_conf:
                     opportunities.append(opp)
             except Exception as e:
                 logger.error(f"Scan failed for {instrument_key}: {e}")
@@ -142,8 +147,11 @@ class SignalEngine:
         )
         if trade_mode == "SELL_OPTION":
             confidence = min(0.95, confidence + 0.05)
+            min_conf = self.min_sell_confidence
+        else:
+            min_conf = self.min_confidence
 
-        if confidence < self.min_confidence:
+        if confidence < min_conf:
             return None
 
         underlying = chain_analysis.get("underlying", float(df["close"].iloc[-1]))

@@ -35,10 +35,17 @@ class EntryRuleEngine:
         cfg = self.get_instrument_config(instrument)
         news_sentiment = news_sentiment or {}
 
-        # Try premium selling first in range-bound / high-vol regimes
+        # Try premium selling first — backtest-proven profitable edge
         sell_setup = self._evaluate_sell(instrument, trend, breakout, latest, window, cfg, vix, news_sentiment)
         if sell_setup:
             return sell_setup
+
+        # Profit mode: skip buying unless trend is exceptionally strong
+        profit_cfg = self.config.get("profit_mode", {})
+        if profit_cfg.get("enabled") and profit_cfg.get("sell_only_default"):
+            buy_adx = profit_cfg.get("buy_min_adx", 28)
+            if float(latest["adx"]) < buy_adx:
+                return None
 
         strategy = cfg.get("strategy", "trend_continuation")
         if strategy == "pullback_entry":
@@ -48,6 +55,11 @@ class EntryRuleEngine:
 
         if not direction:
             return None
+
+        if profit_cfg.get("enabled"):
+            min_confirms = profit_cfg.get("buy_min_confirms", 4)
+            if not self._has_confirms(trend, breakout, latest, direction, min_confirms, cfg):
+                return None
 
         if not self._news_allows(direction, news_sentiment, cfg):
             return None
@@ -172,6 +184,22 @@ class EntryRuleEngine:
             return None
 
         return trend["direction"]
+
+    def _has_confirms(
+        self, trend: dict, breakout: dict, latest: pd.Series, direction: str, min_confirms: int, cfg: dict
+    ) -> bool:
+        confirms = 0
+        if direction == "BULLISH":
+            if latest["ema_9"] > latest["ema_21"] > latest["sma_50"]:
+                confirms += 2
+            if breakout.get("breakout") and breakout["direction"] == "UP":
+                confirms += 1
+        else:
+            if latest["ema_9"] < latest["ema_21"] < latest["sma_50"]:
+                confirms += 2
+            if breakout.get("breakout") and breakout["direction"] == "DOWN":
+                confirms += 1
+        return confirms >= min_confirms
 
     def _pullback_entry(
         self, trend: dict, breakout: dict, latest: pd.Series, window: pd.DataFrame, cfg: dict
