@@ -1,0 +1,79 @@
+# Personal Options Trading Automator Configuration
+
+instruments:
+  nifty50:
+    exchange: NFO
+    underlying: NIFTY
+    index_name: "NIFTY 50"
+    lot_size: 25
+    strike_interval: 50
+    enabled: true
+  sensex:
+    exchange: BFO
+    underlying: SENSEX
+    index_name: "SENSEX"
+    lot_size: 10
+    strike_interval: 100
+    enabled: true
+  crude_oil:
+    exchange: MCX
+    underlying: CRUDEOIL
+    index_name: "CRUDE OIL"
+    lot_size: 100
+    strike_interval: 50
+    enabled: true
+
+strategies:
+  momentum_breakout:
+    enabled: true
+    weight: 0.30
+    min_confidence: 0.65
+    rsi_oversold: 35
+    rsi_overbought: 65
+    volume_spike_multiplier: 1.5
+  oi_analysis:
+    enabled: true
+    weight: 0.35
+    min_pcr_change: 0.05
+    max_call_oi_strike_distance: 3
+    min_put_call_ratio: 0.8
+  news_sentiment:
+    enabled: true
+    weight: 0.20
+    min_sentiment_score: 0.3
+    lookback_hours: 24
+  iv_rank:
+    enabled: true
+    weight: 0.15
+    buy_below_iv_rank: 40
+    sell_above_iv_rank: 70
+
+trading:
+  profit_target_pct: 20.0
+  stop_loss_pct: 15.0
+  trailing_stop_pct: 10.0
+  max_holding_minutes: 240
+  scan_interval_seconds: 60
+  market_open: "09:15"
+  market_close: "15:30"
+  pre_market_scan: "09:00"
+
+news_sources:
+  rss:
+    - name: Moneycontrol Markets
+      url: https://www.moneycontrol.com/rss/marketreports.xml
+    - name: Economic Times Markets
+      url: https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms
+    - name: Livemint Markets
+      url: https://www.livemint.com/rss/markets
+    - name: Reuters Business
+      url: https://feeds.reuters.com/reuters/businessNews
+  keywords:
+    nifty: ["nifty", "nifty50", "nifty 50", "banknifty", "nse", "fii", "dii", "rbi", "repo rate"]
+    sensex: ["sensex", "bse", "mumbai", "india market", "indian equities"]
+    crude: ["crude", "crude oil", "wti", "brent", "opec", "oil price", "petroleum", "energy"]
+
+data:
+  history_days: 365
+  cache_dir: data/cache
+  db_path: data/trading.db
