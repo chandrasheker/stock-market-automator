@@ -1,0 +1,273 @@
+# Personal Options Trading Automator Configuration
+
+# Profit-first mode: backtest showed BUY options lose money on NIFTY/SENSEX.
+# Selling OTM premium in range-bound markets is the profitable edge.
+profit_mode:
+  enabled: true
+  sell_only_default: true          # disable buy CE/PE unless strong trend
+  buy_min_adx: 28                # only buy when trend is very strong
+  buy_min_confirms: 4
+  max_trades_per_day: 2
+  min_sell_confidence: 0.70
+
+instruments:
+  nifty50:
+    exchange: NFO
+    underlying: NIFTY
+    index_name: "NIFTY 50"
+    lot_size: 25
+    strike_interval: 50
+    enabled: true
+    actions:
+      buy_ce: false
+      buy_pe: false
+      sell_ce: true
+      sell_pe: true
+  sensex:
+    exchange: BFO
+    underlying: SENSEX
+    index_name: "SENSEX"
+    lot_size: 10
+    strike_interval: 100
+    enabled: true
+    actions:
+      buy_ce: false
+      buy_pe: false
+      sell_ce: true
+      sell_pe: true
+  crude_oil:
+    exchange: MCX
+    underlying: CRUDEOIL
+    index_name: "CRUDE OIL"
+    lot_size: 100
+    strike_interval: 50
+    enabled: false
+    actions:
+      buy_ce: false
+      buy_pe: false
+      sell_ce: true
+      sell_pe: true
+    # Crude is more volatile than indices — looser ADX, ATR-based vol gate,
+    # and India VIX is irrelevant here (handled in code).
+    option_selling:
+      max_adx: 28
+      min_atr_pct: 0.015
+
+strategies:
+  momentum_breakout:
+    enabled: true
+    weight: 0.30
+    min_confidence: 0.65
+    rsi_oversold: 35
+    rsi_overbought: 65
+    volume_spike_multiplier: 1.5
+  oi_analysis:
+    enabled: true
+    weight: 0.35
+    min_pcr_change: 0.05
+    max_call_oi_strike_distance: 3
+    min_put_call_ratio: 0.8
+  news_sentiment:
+    enabled: true
+    weight: 0.20
+    min_sentiment_score: 0.3
+    lookback_hours: 24
+  iv_rank:
+    enabled: true
+    weight: 0.15
+    buy_below_iv_rank: 40
+    sell_above_iv_rank: 70
+
+trading:
+  profit_target_pct: 20.0
+  stop_loss_pct: 15.0
+  trailing_stop_pct: 10.0
+  max_holding_minutes: 240
+  scan_interval_seconds: 60
+  market_open: "09:15"
+  market_close: "15:30"
+  pre_market_scan: "09:00"
+
+news_sources:
+  rss:
+    - name: Moneycontrol Markets
+      url: https://www.moneycontrol.com/rss/marketreports.xml
+    - name: Economic Times Markets
+      url: https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms
+    - name: Livemint Markets
+      url: https://www.livemint.com/rss/markets
+    - name: Reuters Business
+      url: https://feeds.reuters.com/reuters/businessNews
+  keywords:
+    nifty: ["nifty", "nifty50", "nifty 50", "banknifty", "nse", "fii", "dii", "rbi", "repo rate"]
+    sensex: ["sensex", "bse", "mumbai", "india market", "indian equities"]
+    crude: ["crude", "crude oil", "wti", "brent", "opec", "oil price", "petroleum", "energy"]
+
+data:
+  history_days: 365
+  cache_dir: data/cache
+  db_path: data/trading.db
+
+# Backtest-optimized entry rules (tuned on 1 year historical data)
+backtest:
+  defaults:
+    profit_target_pct: 20.0
+    stop_loss_pct: 12.0
+    max_hold_days: 5
+    min_strength: 0.4
+    min_adx: 22
+    min_confirms: 3
+    min_confidence: 0.65
+    max_atr_pct: 0.03
+    strategy: trend_continuation
+    use_news_filter: true
+    news_block_threshold: 0.35
+    rsi_bull_min: 50
+    rsi_bull_max: 65
+    rsi_bear_min: 35
+    rsi_bear_max: 50
+  instruments:
+    nifty50:
+      strategy: trend_continuation
+      min_adx: 20
+      min_confirms: 3
+      stop_loss_pct: 10.0
+      max_hold_days: 7
+      max_atr_pct: 0.03
+    sensex:
+      strategy: trend_continuation
+      min_adx: 18
+      min_confirms: 3
+      stop_loss_pct: 10.0
+      max_hold_days: 4
+      max_atr_pct: 0.03
+    crude_oil:
+      strategy: pullback_entry
+      min_adx: 18
+      stop_loss_pct: 10.0
+      max_hold_days: 5
+      rsi_pullback_bull_min: 40
+      rsi_pullback_bull_max: 55
+      rsi_pullback_bear_min: 45
+      rsi_pullback_bear_max: 60
+
+# Options selling (premium collection) — used in range-bound markets
+option_selling:
+  enabled: true
+  profit_target_pct: 50.0    # exit when 50% of sold premium captured
+  stop_loss_pct: 80.0        # exit if premium doubles against you
+  max_adx: 22                # only sell when trend is weak
+  min_vix: 14                # sell when IV elevated (theta in your favor)
+  min_iv_percentile: 50      # VIX percentile vs 1-year history (avoid low-IV sells)
+  min_atr_pct: 0.012
+  max_bullish_news: 0.25     # don't sell calls if news very bullish
+  min_bearish_news: -0.25    # don't sell puts if news very bearish
+  block_near_events: true    # skip sells near RBI/Fed/budget/expiry headlines
+
+# Liquidity filter — skip illiquid strikes (poor fills)
+liquidity:
+  enabled: true
+  min_ltp: 15.0
+  max_spread_pct: 1.0
+  max_spread_rupees: 2.0
+  min_volume: 500
+  default_min_oi: 10000
+  instruments:
+    nifty50:
+      min_oi: 10000
+    sensex:
+      min_oi: 5000
+    crude_oil:
+      min_oi: 1000
+
+# Time-of-day filters (index session). Crude (MCX) has its own window below.
+time_filters:
+  enabled: true
+  no_entry_before: "09:30"   # avoid opening volatility
+  no_entry_after: "15:15"    # no new intraday entries
+  force_exit_before: "15:20" # close all MIS before close
+  avoid_opening_volatility: true
+  crude:                     # MCX crude oil runs 9 AM–11:30 PM IST
+    market_open: "09:00"
+    market_close: "23:30"
+    no_entry_before: "09:15"
+    no_entry_after: "23:00"
+    force_exit_before: "23:25"
+    avoid_opening_volatility: false
+
+# Delta-based strike selection
+strike_selection:
+  use_delta: true
+  buy_delta_min: 0.30
+  buy_delta_max: 0.50
+  sell_delta_min: 0.15
+  sell_delta_max: 0.25
+  fallback_otm_distance: true
+
+# Exit rules (profit target, SL, trailing, time)
+exit_rules:
+  trailing_stop_pct: 10.0
+  trailing_activate_after_pct: 15.0
+  force_close_before: "15:20"
+  max_holding_minutes: 240
+
+# Risk limits (beyond .env defaults)
+risk:
+  max_consecutive_losses: 3
+
+# Major event blocking for premium selling
+events:
+  enabled: true
+  block_on_news_keywords: true   # block sells when scheduled-event phrases appear in news
+  block_expiry_day_sells: false  # opt-in: avoid new index sells on expiry day
+  expiry_block_after_hour: 14    # if above is true, only block from 2 PM IST
+  keywords:
+    - rbi policy
+    - rbi monetary policy
+    - monetary policy committee
+    - mpc meeting
+    - mpc decision
+    - repo rate decision
+    - rate decision
+    - union budget
+    - interim budget
+    - fomc meeting
+    - fomc decision
+    - fed rate decision
+    - fed policy
+    - fed decision
+    - election results
+    - election result
+    - exit poll
+  blocked_dates: []
+
+# IV percentile analysis (India VIX)
+iv_analysis:
+  lookback_days: 252
+
+# Indian F&O transaction costs (Zerodha approximations)
+costs:
+  brokerage_flat: 20.0       # ₹20 per order
+  brokerage_pct: 0.0003      # 0.03% (whichever is lower)
+  min_net_profit_multiplier: 2.0  # gross profit must be 2x costs
+
+# Option chain live refresh interval (seconds)
+option_chain:
+  refresh_seconds: 3
+  strikes_each_side: 10
+  use_websocket: false   # REST quotes work everywhere; WS often 403s on cloud VMs
+daily_backtest:
+  enabled: true
+  run_at: "08:00"            # IST, before market open
+  block_trading_if_negative: true
+  min_net_win_rate: 0.50
+
+# TradingView embedded charts + alert webhooks
+tradingview:
+  enabled: true
+  chart_theme: dark
+  chart_interval: "15"       # minutes: 1, 5, 15, 60, D
+  symbols:
+    nifty50: NSE:NIFTY
+    sensex: BSE:SENSEX
+    crude_oil: MCX:CRUDEOIL1!
