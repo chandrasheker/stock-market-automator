@@ -43,12 +43,15 @@ class OrderManager:
             logger.error(f"Could not find tradingsymbol for {opportunity.instrument}")
             return None
 
+        is_sell = opportunity.direction.startswith("SELL")
+        txn_type = self.kite.TRANSACTION_TYPE_SELL if is_sell else self.kite.TRANSACTION_TYPE_BUY
+
         try:
             order_id = self.kite.place_order(
                 variety=self.kite.VARIETY_REGULAR,
                 exchange=exchange,
                 tradingsymbol=tradingsymbol,
-                transaction_type=self.kite.TRANSACTION_TYPE_BUY,
+                transaction_type=txn_type,
                 quantity=quantity,
                 product=self.kite.PRODUCT_MIS,
                 order_type=self.kite.ORDER_TYPE_LIMIT,
@@ -56,7 +59,7 @@ class OrderManager:
                 validity=self.kite.VALIDITY_DAY,
                 tag="auto-trader",
             )
-            logger.info(f"LIVE ORDER placed: {order_id} - {tradingsymbol}")
+            logger.info(f"LIVE ORDER [{opportunity.trade_mode}]: {order_id} - {tradingsymbol}")
 
             db = get_session()
             try:
@@ -106,12 +109,15 @@ class OrderManager:
             return None
 
     def exit_position(self, trade: Trade, reason: str = "MANUAL") -> bool:
+        is_sell = trade.direction and trade.direction.startswith("SELL")
+        # Close short by buying back, close long by selling
+        close_txn = self.kite.TRANSACTION_TYPE_BUY if is_sell else self.kite.TRANSACTION_TYPE_SELL
         try:
             order_id = self.kite.place_order(
                 variety=self.kite.VARIETY_REGULAR,
                 exchange=trade.exchange,
                 tradingsymbol=trade.tradingsymbol,
-                transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+                transaction_type=close_txn,
                 quantity=trade.quantity,
                 product=self.kite.PRODUCT_MIS,
                 order_type=self.kite.ORDER_TYPE_MARKET,

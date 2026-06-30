@@ -90,6 +90,8 @@ backtest:
     min_confidence: 0.65
     max_atr_pct: 0.03
     strategy: trend_continuation
+    use_news_filter: true
+    news_block_threshold: 0.35
     rsi_bull_min: 50
     rsi_bull_max: 65
     rsi_bear_min: 35
@@ -118,3 +120,27 @@ backtest:
       rsi_pullback_bull_max: 55
       rsi_pullback_bear_min: 45
       rsi_pullback_bear_max: 60
+
+# Options selling (premium collection) — used in range-bound markets
+option_selling:
+  enabled: true
+  profit_target_pct: 50.0    # exit when 50% of sold premium captured
+  stop_loss_pct: 80.0        # exit if premium doubles against you
+  max_adx: 22                # only sell when trend is weak
+  min_vix: 14                # sell when IV elevated (theta in your favor)
+  min_atr_pct: 0.012
+  max_bullish_news: 0.25     # don't sell calls if news very bullish
+  min_bearish_news: -0.25    # don't sell puts if news very bearish
+
+# Indian F&O transaction costs (Zerodha approximations)
+costs:
+  brokerage_flat: 20.0       # ₹20 per order
+  brokerage_pct: 0.0003      # 0.03% (whichever is lower)
+  min_net_profit_multiplier: 2.0  # gross profit must be 2x costs
+
+# Daily automated backtest schedule
+daily_backtest:
+  enabled: true
+  run_at: "08:00"            # IST, before market open
+  block_trading_if_negative: true
+  min_net_win_rate: 0.50

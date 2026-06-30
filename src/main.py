@@ -74,6 +74,20 @@ class TradingBot:
         self.scheduler.add_job(self.scan_and_trade, "interval", seconds=scan_interval)
         self.scheduler.add_job(self.monitor_positions, "interval", seconds=30)
         self.scheduler.add_job(self.fetch_news, "interval", minutes=15)
+
+        # Daily backtest before market open
+        bt_cfg = self.config.get("daily_backtest", {})
+        if bt_cfg.get("enabled", True):
+            run_at = bt_cfg.get("run_at", "08:00")
+            hour, minute = map(int, run_at.split(":"))
+            self.scheduler.add_job(
+                self.run_daily_backtest,
+                "cron",
+                hour=hour,
+                minute=minute,
+                day_of_week="mon-fri",
+            )
+            logger.info(f"Daily backtest scheduled at {run_at} IST (Mon-Fri)")
         self.scheduler.start()
 
         if self.env.trading_mode == "live":
@@ -171,6 +185,13 @@ class TradingBot:
         except Exception as e:
             logger.warning(f"News fetch failed: {e}")
 
+    def run_daily_backtest(self):
+        try:
+            from src.backtest.daily_runner import DailyBacktestRunner
+            DailyBacktestRunner().run()
+        except Exception as e:
+            logger.error(f"Daily backtest failed: {e}")
+
     def _is_market_hours(self) -> bool:
         now = datetime.now()
         if now.weekday() >= 5:
@@ -191,7 +212,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Indian Options Trading Automator")
-    parser.add_argument("command", choices=["run", "login", "scan", "download", "backtest"])
+    parser.add_argument("command", choices=["run", "login", "scan", "download", "backtest", "daily-backtest"])
     parser.add_argument("--instrument", default="all")
     args = parser.parse_args()
 
@@ -207,6 +228,9 @@ def main():
             print(f"\n{o.instrument} | {o.direction} | Confidence: {o.confidence:.0%}")
             print(f"  Entry: ₹{o.entry_price} → Target: ₹{o.target_price} | SL: ₹{o.stop_loss}")
             print(f"  {o.reasoning}")
+    elif args.command == "daily-backtest":
+        from src.backtest.daily_runner import DailyBacktestRunner
+        DailyBacktestRunner().run()
     elif args.command == "backtest":
         from src.backtest.engine import BacktestEngine
 
@@ -218,16 +242,18 @@ def main():
             df = bot.data_fetcher.fetch_index_history(args.instrument)
             result = engine.run(df, args.instrument)
             print(f"\nBacktest Results for {args.instrument}:")
-            print(f"  Trades: {result.total_trades} | Win Rate: {result.win_rate:.1%}")
-            print(f"  Total PnL: ₹{result.total_pnl:,.0f} | Max DD: {result.max_drawdown:.1f}%")
+            print(f"  Trades: {result.total_trades} (Buy: {result.buy_trades}, Sell: {result.sell_trades})")
+            print(f"  Net Win Rate: {result.net_win_rate:.1%} | Gross Win Rate: {result.win_rate:.1%}")
+            print(f"  Gross PnL: ₹{result.gross_pnl:,.0f} | Costs: ₹{result.total_costs:,.0f}")
+            print(f"  Net PnL: ₹{result.total_pnl:,.0f} | Max DD: {result.max_drawdown:.1f}%")
             print(f"  Sharpe: {result.sharpe_ratio:.2f} | Profit Factor: {result.profit_factor:.2f}")
-            print(f"  Targets: {result.target_hits} | Stop Losses: {result.stop_loss_hits} | Time Exits: {result.time_exits}")
             if result.trades:
-                print(f"\n  Recent trades:")
+                print(f"\n  Recent trades (net of STT/GST/brokerage):")
                 for t in result.trades[-5:]:
                     status = "WIN" if t.win else "LOSS"
-                    print(f"    {t.entry_date[:10]} {t.direction} ₹{t.entry_price}→₹{t.exit_price} "
-                          f"({t.pnl_pct:+.1f}%) [{t.exit_reason}] {status}")
+                    print(f"    {t.entry_date[:10]} {t.direction} [{t.trade_mode}] "
+                          f"₹{t.entry_price}→₹{t.exit_price} gross ₹{t.gross_pnl:+.0f} "
+                          f"costs ₹{t.costs:.0f} net ₹{t.net_pnl:+.0f} [{t.exit_reason}] {status}")
     elif args.command == "run":
         signal.signal(signal.SIGINT, lambda s, f: bot.stop())
         signal.signal(signal.SIGTERM, lambda s, f: bot.stop())

@@ -12,8 +12,11 @@ A personal, private algorithmic trading system for Indian F&O markets. Scans NIF
   - Open Interest analysis (PCR, max pain, OI changes)
   - News sentiment (RSS feeds + optional NewsAPI)
   - IV/VIX regime detection
-- **20% profit target** — Automatically sets target at 20% premium gain per lot
-- **Risk management** — Stop loss, daily loss limits, position sizing, kill switch
+- **Options buying AND selling** — Buys directional options (20% target) or sells OTM premium in range-bound markets
+- **Full cost modeling** — STT (0.0625%), GST (18%), brokerage (₹20/order), exchange charges, stamp duty, SEBI fees
+- **Cost-aware trade gate** — Skips trades where charges would eat the profit
+- **Daily auto-backtest** — Runs at 8:00 AM IST, blocks trading if net P&L is negative
+- **News-aligned trading** — Matches live signals against latest RSS/news sentiment per instrument
 - **Paper trading** — Default mode for safe testing before going live
 - **Zerodha Kite Connect** — Full integration for live order execution
 - **Backtesting** — Validate strategies on historical data

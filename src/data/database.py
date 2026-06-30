@@ -106,6 +106,24 @@ class DailyPnL(Base):
     win_count = Column(Integer, default=0)
 
 
+class DailyBacktestReport(Base):
+    __tablename__ = "daily_backtest_reports"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(DateTime, unique=True, index=True)
+    combined_trades = Column(Integer, default=0)
+    combined_net_win_rate = Column(Float, default=0.0)
+    combined_gross_pnl = Column(Float, default=0.0)
+    combined_costs = Column(Float, default=0.0)
+    combined_net_pnl = Column(Float, default=0.0)
+    combined_sharpe = Column(Float, default=0.0)
+    strategy_approved = Column(Boolean, default=False)
+    news_json = Column(Text)
+    instruments_json = Column(Text)
+    today_bias_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 _engine = None
 _SessionLocal: Optional[sessionmaker] = None
 

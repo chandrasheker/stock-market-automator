@@ -40,7 +40,7 @@ def main():
 
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Live Signals", "Positions", "News", "Backtest", "Settings"],
+        ["Dashboard", "Live Signals", "Positions", "News", "Backtest", "Daily Report", "Settings"],
     )
 
     st.sidebar.divider()
@@ -59,6 +59,8 @@ def main():
         show_news()
     elif page == "Backtest":
         show_backtest()
+    elif page == "Daily Report":
+        show_daily_report()
     elif page == "Settings":
         show_settings(env, config)
 
@@ -215,6 +217,50 @@ def show_news():
                 st.caption(f"{article['source']} | {article.get('instruments', [])}")
 
 
+def show_daily_report():
+    st.title("Daily Backtest Report")
+    from src.backtest.daily_runner import DailyBacktestRunner
+
+    runner = DailyBacktestRunner()
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("Run Daily Backtest Now", type="primary"):
+            with st.spinner("Running backtest with costs & news..."):
+                report = runner.run()
+                st.success("Daily backtest complete!")
+                st.rerun()
+
+    report = runner.get_latest_report()
+    if not report:
+        st.info("No daily backtest yet. Click 'Run Daily Backtest Now' or wait for 8:00 AM auto-run.")
+        return
+
+    approved = report.get("strategy_approved", False)
+    st.metric(
+        "Strategy Status",
+        "APPROVED" if approved else "CAUTION — Net Negative",
+        delta=f"Net ₹{report.get('combined_net_pnl', 0):,.0f}",
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Net Win Rate", f"{report.get('combined_net_win_rate', 0):.1%}")
+    c2.metric("Total Trades", report.get("combined_trades", 0))
+    c3.metric("Gross P&L", f"₹{report.get('combined_gross_pnl', 0):,.0f}")
+    c4.metric("Costs (STT+GST+etc)", f"₹{report.get('combined_costs', 0):,.0f}")
+
+    st.subheader("Today's News Bias")
+    bias = report.get("today_bias", {})
+    for inst, b in bias.items():
+        st.markdown(f"**{inst}**: {b.get('direction', 'N/A')} — prefer {b.get('prefer', '')}")
+        if b.get("caution"):
+            st.warning(b["caution"])
+
+    st.subheader("Per-Instrument Results")
+    for inst, data in report.get("instruments", {}).items():
+        with st.expander(f"{inst} — Net ₹{data.get('net_pnl', 0):,.0f}"):
+            st.write(data)
+
+
 def show_backtest():
     st.title("Strategy Backtest")
     instrument = st.selectbox(
@@ -231,30 +277,32 @@ def show_backtest():
             if instrument == "all":
                 combined = engine.run_all()
                 st.success(
-                    f"Combined Win Rate: **{combined.combined_win_rate:.1%}** "
-                    f"across {combined.combined_trades} trades"
+                    f"Net Win Rate: **{combined.combined_net_win_rate:.1%}** | "
+                    f"Net P&L: **₹{combined.combined_pnl:,.0f}** (after STT/GST/brokerage)"
                 )
 
-                cols = st.columns(3)
-                cols[0].metric("Combined Win Rate", f"{combined.combined_win_rate:.1%}")
-                cols[1].metric("Total Trades", combined.combined_trades)
-                cols[2].metric("Total P&L", f"₹{combined.combined_pnl:,.0f}")
+                cols = st.columns(4)
+                cols[0].metric("Net Win Rate", f"{combined.combined_net_win_rate:.1%}")
+                cols[1].metric("Net P&L", f"₹{combined.combined_pnl:,.0f}")
+                cols[2].metric("Total Costs", f"₹{combined.combined_costs:,.0f}")
+                cols[3].metric("Strategy", "OK" if combined.strategy_approved else "CAUTION")
 
                 for inst, result in combined.instruments.items():
                     name = get_yaml_config()["instruments"][inst]["index_name"]
-                    with st.expander(f"{name} — {result.win_rate:.1%} win rate ({result.total_trades} trades)"):
+                    with st.expander(f"{name} — Net {result.net_win_rate:.1%} ({result.total_trades} trades)"):
                         c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("Win Rate", f"{result.win_rate:.1%}")
-                        c2.metric("P&L", f"₹{result.total_pnl:,.0f}")
-                        c3.metric("Profit Factor", f"{result.profit_factor:.2f}")
-                        c4.metric("Max Drawdown", f"{result.max_drawdown:.1f}%")
+                        c1.metric("Net Win Rate", f"{result.net_win_rate:.1%}")
+                        c2.metric("Net P&L", f"₹{result.total_pnl:,.0f}")
+                        c3.metric("Costs", f"₹{result.total_costs:,.0f}")
+                        c4.metric("Buy/Sell", f"{result.buy_trades}/{result.sell_trades}")
                         if result.trades:
                             trade_rows = [{
                                 "Entry": t.entry_date[:10],
                                 "Direction": t.direction,
-                                "Entry ₹": t.entry_price,
-                                "Exit ₹": t.exit_price,
-                                "PnL%": f"{t.pnl_pct:+.1f}%",
+                                "Mode": t.trade_mode,
+                                "Gross": t.gross_pnl,
+                                "Costs": t.costs,
+                                "Net": t.net_pnl,
                                 "Exit": t.exit_reason,
                                 "Result": "WIN" if t.win else "LOSS",
                             } for t in result.trades]

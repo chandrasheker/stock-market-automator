@@ -8,7 +8,8 @@ from typing import Optional
 from loguru import logger
 
 from src.analysis.signal_engine import TradeOpportunity
-from src.config import get_env
+from src.config import get_env, get_yaml_config
+from src.costs.calculator import CostCalculator
 from src.data.database import DailyPnL, Trade, get_session, init_db
 
 
@@ -17,6 +18,8 @@ class RiskManager:
 
     def __init__(self):
         self.env = get_env()
+        self.config = get_yaml_config()
+        self.costs = CostCalculator()
         init_db()
         self._kill_switch = False
 
@@ -36,11 +39,30 @@ class RiskManager:
         if self._kill_switch:
             return False, "Kill switch is active"
 
+        # Daily backtest gate
+        bt_cfg = self.config.get("daily_backtest", {})
+        if bt_cfg.get("block_trading_if_negative", True):
+            from src.backtest.daily_runner import DailyBacktestRunner
+            allowed, reason = DailyBacktestRunner().is_trading_allowed()
+            if not allowed:
+                return False, reason
+
         if opportunity.confidence < 0.65:
             return False, f"Confidence too low: {opportunity.confidence:.2f}"
 
-        if opportunity.expected_profit_pct < self.env.profit_target_pct * 0.9:
-            return False, f"Expected profit {opportunity.expected_profit_pct:.1f}% below target"
+        exchange = self.config["instruments"][opportunity.instrument].get("exchange", "NFO")
+        approved, cost_info = self.costs.is_trade_worth_it(
+            opportunity.entry_price,
+            opportunity.target_price,
+            opportunity.lot_size,
+            exchange,
+            opportunity.trade_mode,
+        )
+        if not approved:
+            return False, (
+                f"Net profit after STT/GST/brokerage too low "
+                f"(costs ₹{cost_info['total_costs']:.0f}, gross ₹{cost_info['gross_pnl']:.0f})"
+            )
 
         open_positions = self._count_open_positions()
         if open_positions >= self.env.max_open_positions:
@@ -50,11 +72,6 @@ class RiskManager:
         max_loss = self.env.capital * (self.env.max_daily_loss_pct / 100)
         if daily_loss < -max_loss:
             return False, f"Daily loss limit hit: ₹{daily_loss:,.0f}"
-
-        margin_needed = opportunity.entry_price * opportunity.lot_size
-        max_risk = self.env.capital * (self.env.max_risk_per_trade_pct / 100)
-        if margin_needed > max_risk * 5:
-            return False, f"Position too large: ₹{margin_needed:,.0f} margin needed"
 
         return True, "Approved"
 
@@ -72,15 +89,26 @@ class RiskManager:
         if trade.status != "OPEN":
             return None
 
-        if current_price >= trade.target_price:
-            return "TARGET_HIT"
+        is_sell = trade.direction and trade.direction.startswith("SELL")
 
-        if current_price <= trade.stop_loss:
-            return "STOP_LOSS"
-
-        pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
-        if pnl_pct >= self.env.profit_target_pct:
-            return "PROFIT_TARGET"
+        if is_sell:
+            # Sold premium — profit when price falls, loss when it rises
+            if current_price <= trade.target_price:
+                return "TARGET_HIT"
+            if current_price >= trade.stop_loss:
+                return "STOP_LOSS"
+            pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
+            sell_target = self.config.get("option_selling", {}).get("profit_target_pct", 50.0)
+            if pnl_pct >= sell_target:
+                return "PROFIT_TARGET"
+        else:
+            if current_price >= trade.target_price:
+                return "TARGET_HIT"
+            if current_price <= trade.stop_loss:
+                return "STOP_LOSS"
+            pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
+            if pnl_pct >= self.env.profit_target_pct:
+                return "PROFIT_TARGET"
 
         if trade.entry_time:
             holding_minutes = (datetime.utcnow() - trade.entry_time).total_seconds() / 60
@@ -92,12 +120,19 @@ class RiskManager:
     def record_trade_close(self, trade: Trade, exit_price: float, reason: str):
         db = get_session()
         try:
+            exchange = self.config["instruments"].get(trade.instrument, {}).get("exchange", "NFO")
+            trade_mode = "SELL_OPTION" if trade.direction and trade.direction.startswith("SELL") else "BUY_OPTION"
+            net_pnl, cost_obj = self.costs.net_pnl(
+                trade.entry_price, exit_price, trade.quantity, exchange, trade_mode
+            )
+
             trade.exit_price = exit_price
             trade.exit_time = datetime.utcnow()
             trade.exit_reason = reason
             trade.status = "CLOSED"
-            trade.pnl = (exit_price - trade.entry_price) * trade.quantity
-            trade.pnl_pct = ((exit_price - trade.entry_price) / trade.entry_price) * 100
+            trade.pnl = net_pnl
+            gross = self.costs.gross_pnl(trade.entry_price, exit_price, trade.quantity, trade_mode)
+            trade.pnl_pct = (gross / (trade.entry_price * trade.quantity)) * 100 if trade.entry_price else 0
 
             db.merge(trade)
             self._update_daily_pnl(trade.pnl, trade.pnl > 0)

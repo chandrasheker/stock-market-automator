@@ -28,14 +28,109 @@ class EntryRuleEngine:
         breakout: dict,
         latest: pd.Series,
         window: pd.DataFrame,
-    ) -> Optional[str]:
-        """Return BULLISH/BEARISH if entry criteria met, else None."""
+        vix: float = 0.0,
+        news_sentiment: Optional[dict] = None,
+    ) -> Optional[dict]:
+        """Return trade setup dict or None. Includes BUY and SELL modes."""
         cfg = self.get_instrument_config(instrument)
-        strategy = cfg.get("strategy", "trend_continuation")
+        news_sentiment = news_sentiment or {}
 
+        # Try premium selling first in range-bound / high-vol regimes
+        sell_setup = self._evaluate_sell(instrument, trend, breakout, latest, window, cfg, vix, news_sentiment)
+        if sell_setup:
+            return sell_setup
+
+        strategy = cfg.get("strategy", "trend_continuation")
         if strategy == "pullback_entry":
-            return self._pullback_entry(trend, breakout, latest, window, cfg)
-        return self._trend_continuation(trend, breakout, latest, window, cfg)
+            direction = self._pullback_entry(trend, breakout, latest, window, cfg)
+        else:
+            direction = self._trend_continuation(trend, breakout, latest, window, cfg)
+
+        if not direction:
+            return None
+
+        if not self._news_allows(direction, news_sentiment, cfg):
+            return None
+
+        return {
+            "mode": "BUY_OPTION",
+            "direction": direction,
+            "opt_type": "CE" if direction == "BULLISH" else "PE",
+        }
+
+    def evaluate_direction_only(
+        self,
+        instrument: str,
+        trend: dict,
+        breakout: dict,
+        latest: pd.Series,
+        window: pd.DataFrame,
+    ) -> Optional[str]:
+        """Backward-compatible direction-only evaluation for simple backtest."""
+        result = self.evaluate(instrument, trend, breakout, latest, window)
+        if result and result["mode"] == "BUY_OPTION":
+            return result["direction"]
+        return None
+
+    def _evaluate_sell(
+        self,
+        instrument: str,
+        trend: dict,
+        breakout: dict,
+        latest: pd.Series,
+        window: pd.DataFrame,
+        cfg: dict,
+        vix: float,
+        news_sentiment: dict,
+    ) -> Optional[dict]:
+        sell_cfg = cfg.get("option_selling", self.config.get("option_selling", {}))
+        if not sell_cfg.get("enabled", True):
+            return None
+
+        adx = float(latest["adx"])
+        atr_pct = latest["atr"] / latest["close"] if latest["close"] > 0 else 0
+        rsi = float(latest["rsi"])
+
+        # Sell premium when trend is weak and volatility elevated
+        max_adx = sell_cfg.get("max_adx", 22)
+        min_vix = sell_cfg.get("min_vix", 14)
+        vix_ok = vix >= min_vix if vix > 0 else atr_pct >= sell_cfg.get("min_atr_pct", 0.012)
+
+        if adx > max_adx or not vix_ok:
+            return None
+
+        # Avoid selling into strong breakouts
+        if breakout.get("breakout") and breakout.get("strength", 0) > 0.004:
+            return None
+
+        near_upper = latest["close"] >= latest["bb_mid"] and latest["close"] >= latest["bb_upper"] * 0.98
+        near_lower = latest["close"] <= latest["bb_mid"] and latest["close"] <= latest["bb_lower"] * 1.02
+
+        news_score = news_sentiment.get("score", 0)
+
+        # Sell OTM call in neutral-to-bearish range
+        if near_upper or (45 <= rsi <= 60 and trend["direction"] != "BULLISH"):
+            if news_score < sell_cfg.get("max_bullish_news", 0.25):
+                return {"mode": "SELL_OPTION", "direction": "BEARISH", "opt_type": "CE"}
+
+        # Sell OTM put in neutral-to-bullish range
+        if near_lower or (40 <= rsi <= 55 and trend["direction"] != "BEARISH"):
+            if news_score > sell_cfg.get("min_bearish_news", -0.25):
+                return {"mode": "SELL_OPTION", "direction": "BULLISH", "opt_type": "PE"}
+
+        return None
+
+    @staticmethod
+    def _news_allows(direction: str, news_sentiment: dict, cfg: dict) -> bool:
+        if not cfg.get("use_news_filter", True):
+            return True
+        score = news_sentiment.get("score", 0)
+        threshold = cfg.get("news_block_threshold", 0.35)
+        if direction == "BULLISH" and score < -threshold:
+            return False
+        if direction == "BEARISH" and score > threshold:
+            return False
+        return True
 
     def _trend_continuation(
         self, trend: dict, breakout: dict, latest: pd.Series, window: pd.DataFrame, cfg: dict

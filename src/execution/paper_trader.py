@@ -77,9 +77,9 @@ class PaperTrader:
 
             self.virtual_balance -= margin
             logger.info(
-                f"PAPER TRADE: {tradingsymbol} @ ₹{opportunity.entry_price} "
-                f"x{quantity} | Target: ₹{opportunity.target_price} (+20%) "
-                f"| SL: ₹{opportunity.stop_loss}"
+                f"PAPER TRADE [{opportunity.trade_mode}]: {tradingsymbol} @ ₹{opportunity.entry_price} "
+                f"x{quantity} | Target: ₹{opportunity.target_price} | SL: ₹{opportunity.stop_loss} "
+                f"| Est. costs: ₹{opportunity.estimated_costs:.0f} | Est. net: ₹{opportunity.expected_net_pnl:.0f}"
             )
             return trade
         except Exception as e:
@@ -93,11 +93,10 @@ class PaperTrader:
         reason = self.risk.check_exit_conditions(trade, current_price)
         if reason:
             self.risk.record_trade_close(trade, current_price, reason)
-            pnl = (current_price - trade.entry_price) * trade.quantity
-            self.virtual_balance += (trade.entry_price * trade.quantity) + pnl
+            self.virtual_balance += trade.pnl + (trade.entry_price * trade.quantity)
             logger.info(
                 f"PAPER EXIT ({reason}): {trade.tradingsymbol} @ ₹{current_price} "
-                f"| PnL: ₹{pnl:,.0f} ({trade.pnl_pct:.1f}%)"
+                f"| Net PnL: ₹{trade.pnl:,.0f} (after costs)"
             )
             return True
         return False
