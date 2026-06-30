@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -21,10 +22,17 @@ from src.toggles import (
     get_buy_warning_text,
     get_sell_recommendation_text,
     is_any_buy_enabled,
+    is_instrument_enabled,
     load_toggles,
     save_toggles,
 )
 from src.dashboard.strategy_docs import BACKTEST_METHODOLOGY_MD, STRATEGY_LOGIC_MD
+from src.integrations.tradingview import (
+    build_chart_html,
+    get_pine_script_example,
+    get_tv_symbols,
+    get_webhook_message_template,
+)
 from src.data.database import DailyPnL, Trade, TradeSignal, get_session, init_db
 from src.data.historical import HistoricalDataFetcher
 from src.data.news_fetcher import NewsFetcher
@@ -55,7 +63,7 @@ def main():
     page = st.sidebar.radio(
         "Navigation",
         [
-            "Dashboard", "Option Chain", "Live Signals", "Strategy Logic",
+            "Dashboard", "Option Chain", "TradingView", "Live Signals", "Strategy Logic",
             "Positions", "News", "Backtest", "Daily Report", "Settings",
         ],
     )
@@ -73,6 +81,8 @@ def main():
         show_dashboard(env)
     elif page == "Option Chain":
         show_option_chain(config)
+    elif page == "TradingView":
+        show_tradingview(env, config)
     elif page == "Live Signals":
         show_signals()
     elif page == "Strategy Logic":
@@ -87,6 +97,92 @@ def main():
         show_daily_report()
     elif page == "Settings":
         show_settings(env, config)
+
+
+def show_tradingview(env, config):
+    st.title("TradingView Charts & Alerts")
+    tv_cfg = config.get("tradingview", {})
+    if not tv_cfg.get("enabled", True):
+        st.warning("TradingView integration is disabled in settings.yaml")
+        return
+
+    st.markdown(
+        "Embedded **TradingView** charts for NIFTY, SENSEX, and Crude Oil. "
+        "Use Pine Script alerts to send webhooks into this automator — "
+        "alerts trigger the same **sell-only** signal engine and risk checks as the bot."
+    )
+
+    symbols = get_tv_symbols()
+    inst_names = {
+        "nifty50": "NIFTY 50",
+        "sensex": "SENSEX",
+        "crude_oil": "CRUDE OIL",
+    }
+    theme = tv_cfg.get("chart_theme", "dark")
+    interval = str(tv_cfg.get("chart_interval", "15"))
+
+    tab_labels = [inst_names.get(k, k) for k in symbols if is_instrument_enabled(k) or k != "crude_oil"]
+    if not tab_labels:
+        tab_labels = list(inst_names.values())
+
+    tabs = st.tabs(tab_labels)
+    enabled_keys = [k for k in symbols if k in inst_names]
+    for tab, inst in zip(tabs, enabled_keys):
+        with tab:
+            sym = symbols[inst]
+            st.caption(f"TradingView symbol: `{sym}`")
+            html = build_chart_html(
+                sym, interval=interval, theme=theme, height=520, container_id=f"tv_{inst}"
+            )
+            components.html(html, height=540, scrolling=True)
+
+    st.divider()
+    st.subheader("Webhook Setup")
+
+    secret = env.tradingview_webhook_secret
+    if not secret:
+        st.error("Set `TRADINGVIEW_WEBHOOK_SECRET` in your `.env` file before enabling alerts.")
+    else:
+        base = env.public_webhook_url.strip()
+        if base:
+            webhook_url = base if base.endswith("/webhook/tradingview") else f"{base.rstrip('/')}/webhook/tradingview"
+        else:
+            webhook_url = f"http://YOUR_VM_IP:{env.webhook_port}/webhook/tradingview"
+
+        st.code(webhook_url, language=None)
+        st.markdown(
+            f"1. Start the webhook server: `python -m src.main webhook` (port **{env.webhook_port}**)\n"
+            "2. Open Oracle Cloud / firewall port for inbound TCP on that port (restrict to your IP)\n"
+            "3. In TradingView → create alert → **Webhook URL** → paste URL above\n"
+            "4. Alert message (JSON) — include your secret:"
+        )
+        st.code(get_webhook_message_template("YOUR_SECRET"), language="json")
+        st.info(
+            "Supported actions: `SCAN` (run sell scan), `SELL_CE`, `SELL_PE`, `EXIT`. "
+            "Buy actions (`BUY_CE`/`BUY_PE`) are rejected in profit mode."
+        )
+
+        with st.expander("Example Pine Script (RSI alerts)"):
+            st.code(get_pine_script_example(), language="javascript")
+
+        st.markdown("**systemd service (optional):**")
+        st.code(
+            f"""[Unit]
+Description=TradingView Webhook Server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/stock-market-automator
+ExecStart=/home/ubuntu/stock-market-automator/venv/bin/python -m src.main webhook
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target""",
+            language="ini",
+        )
 
 
 def show_option_chain(config):

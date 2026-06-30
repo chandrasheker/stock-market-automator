@@ -29,6 +29,8 @@ aiosqlite>=0.19.0
 streamlit>=1.29.0
 streamlit-autorefresh>=1.0.1
 plotly>=5.18.0
+fastapi>=0.109.0
+uvicorn>=0.27.0
 
 # Scheduling & Async
 apscheduler>=3.10.4

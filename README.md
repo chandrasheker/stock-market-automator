@@ -21,6 +21,7 @@ A personal, private algorithmic trading system for Indian F&O markets. Scans NIF
 - **Zerodha Kite Connect** — Full integration for live order execution
 - **Backtesting** — Validate strategies on historical data
 - **Streamlit dashboard** — User-friendly web UI for monitoring and control
+- **TradingView integration** — Embedded charts + webhook alerts that trigger the sell-only signal engine
 - **Private & local** — All data stored locally on your Oracle Cloud VM
 
 ## Architecture
@@ -139,7 +140,29 @@ python -m src.main run
 | `python -m src.main backtest` | Backtest all instruments (net of taxes) |
 | `python -m src.main daily-backtest` | Run daily backtest + news alignment now |
 | `python -m src.main run` | Start bot (auto daily backtest at 8:00 AM) |
+| `python -m src.main webhook` | Start TradingView webhook server (port 8765) |
 | `streamlit run src/dashboard/app.py` | Launch web dashboard |
+
+## TradingView Integration
+
+The dashboard includes a **TradingView** page with embedded NIFTY / SENSEX / Crude charts. You can route Pine Script alerts into the bot via webhooks:
+
+1. Set in `.env`:
+   ```env
+   TRADINGVIEW_WEBHOOK_SECRET=your-long-random-secret
+   WEBHOOK_PORT=8765
+   PUBLIC_WEBHOOK_URL=http://YOUR_VM_IP:8765
+   ```
+2. Start the webhook server: `python -m src.main webhook`
+3. In TradingView, create an alert with webhook URL: `http://YOUR_VM_IP:8765/webhook/tradingview`
+4. Alert message JSON (example):
+   ```json
+   {"secret":"your-long-random-secret","instrument":"nifty50","action":"SCAN","source":"tradingview"}
+   ```
+
+**Actions:** `SCAN` runs the sell scanner; `SELL_CE` / `SELL_PE` only execute if the bot agrees; `EXIT` closes open positions. Buy actions are blocked in profit mode.
+
+See `examples/tradingview_alert.pine` for a ready-made Pine Script template.
 
 ## Running as a Service (systemd)
 
@@ -191,6 +214,7 @@ sudo systemctl start trading-bot
 In Oracle Cloud Console → Networking → Security Lists → Add Ingress Rule:
 - Source: your IP
 - Port: 8501 (dashboard)
+- Port: 8765 (TradingView webhook, optional)
 - Protocol: TCP
 
 ## License

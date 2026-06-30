@@ -30,6 +30,10 @@ class EnvSettings(BaseSettings):
     news_api_key: str = Field(default="", alias="NEWS_API_KEY")
     dashboard_port: int = Field(default=8501, alias="DASHBOARD_PORT")
     secret_key: str = Field(default="change-me", alias="SECRET_KEY")
+    tradingview_webhook_secret: str = Field(default="", alias="TRADINGVIEW_WEBHOOK_SECRET")
+    webhook_port: int = Field(default=8765, alias="WEBHOOK_PORT")
+    webhook_host: str = Field(default="0.0.0.0", alias="WEBHOOK_HOST")
+    public_webhook_url: str = Field(default="", alias="PUBLIC_WEBHOOK_URL")
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
 

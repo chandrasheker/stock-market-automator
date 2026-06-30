@@ -1,0 +1,24 @@
+// TradingView → Indian Options Automator webhook example (Pine v5)
+// 1. Set webhook_secret to match TRADINGVIEW_WEBHOOK_SECRET in .env
+// 2. Create alert on chart → Webhook URL → http://YOUR_VM:8765/webhook/tradingview
+// 3. Alert fires on RSI cross — bot runs SELL scan (respects profit mode)
+
+//@version=5
+indicator("Automator Webhook", overlay=true)
+
+webhook_secret = input.string("YOUR_SECRET", "Webhook secret")
+instrument     = input.string("nifty50", "Instrument key", options=["nifty50", "sensex", "crude_oil"])
+action_on_bull = input.string("SELL_PE", "Bullish RSI action", options=["SCAN", "SELL_CE", "SELL_PE"])
+action_on_bear = input.string("SELL_CE", "Bearish RSI action", options=["SCAN", "SELL_CE", "SELL_PE"])
+
+rsi = ta.rsi(close, 14)
+bull = ta.crossover(rsi, 30)
+bear = ta.crossunder(rsi, 70)
+
+msg_bull = '{"secret":"' + webhook_secret + '","instrument":"' + instrument + '","action":"' + action_on_bull + '","source":"tradingview"}'
+msg_bear = '{"secret":"' + webhook_secret + '","instrument":"' + instrument + '","action":"' + action_on_bear + '","source":"tradingview"}'
+
+if bull
+    alert(msg_bull, alert.freq_once_per_bar_close)
+if bear
+    alert(msg_bear, alert.freq_once_per_bar_close)

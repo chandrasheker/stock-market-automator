@@ -172,3 +172,13 @@ daily_backtest:
   run_at: "08:00"            # IST, before market open
   block_trading_if_negative: true
   min_net_win_rate: 0.50
+
+# TradingView embedded charts + alert webhooks
+tradingview:
+  enabled: true
+  chart_theme: dark
+  chart_interval: "15"       # minutes: 1, 5, 15, 60, D
+  symbols:
+    nifty50: NSE:NIFTY
+    sensex: BSE:SENSEX
+    crude_oil: MCX:CRUDEOIL1!

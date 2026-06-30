@@ -213,7 +213,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Indian Options Trading Automator")
-    parser.add_argument("command", choices=["run", "login", "scan", "download", "backtest", "daily-backtest"])
+    parser.add_argument("command", choices=["run", "login", "scan", "download", "backtest", "daily-backtest", "webhook"])
     parser.add_argument("--instrument", default="all")
     args = parser.parse_args()
 
@@ -260,6 +260,11 @@ def main():
         signal.signal(signal.SIGINT, lambda s, f: bot.stop())
         signal.signal(signal.SIGTERM, lambda s, f: bot.stop())
         bot.start()
+    elif args.command == "webhook":
+        from src.webhook.tradingview_server import run_server
+
+        env = get_env()
+        run_server(host=env.webhook_host, port=env.webhook_port)
 
 
 if __name__ == "__main__":
