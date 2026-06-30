@@ -113,13 +113,14 @@ class TradingBot:
             return
 
         logger.info("Scanning for opportunities...")
-        opportunities = self.signal_engine.scan_all()
+        opportunities = self.signal_engine.scan_all(include_buy_suggestions=True)
+        executable = [o for o in opportunities if o.is_recommended]
 
-        if not opportunities:
-            logger.info("No high-confidence opportunities found")
+        if not executable:
+            logger.info("No sell opportunities found")
             return
 
-        for opp in opportunities:
+        for opp in executable:
             logger.info(
                 f"SIGNAL: {opp.instrument} {opp.direction} @ ₹{opp.entry_price} "
                 f"| Confidence: {opp.confidence:.0%} | Target: ₹{opp.target_price} (+20%)"
@@ -223,9 +224,10 @@ def main():
     elif args.command == "download":
         bot.download_history()
     elif args.command == "scan":
-        opps = bot.signal_engine.scan_all()
+        opps = bot.signal_engine.scan_all(include_buy_suggestions=True)
         for o in opps:
-            print(f"\n{o.instrument} | {o.direction} | Confidence: {o.confidence:.0%}")
+            tag = "✅ SELL (recommended)" if o.is_recommended else "⚠️ BUY (not recommended, disabled)"
+            print(f"\n{o.instrument} | {o.direction} | {tag} | Confidence: {o.confidence:.0%}")
             print(f"  Entry: ₹{o.entry_price} → Target: ₹{o.target_price} | SL: ₹{o.stop_loss}")
             print(f"  {o.reasoning}")
     elif args.command == "daily-backtest":

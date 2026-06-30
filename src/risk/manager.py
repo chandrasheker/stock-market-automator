@@ -8,6 +8,7 @@ from typing import Optional
 from loguru import logger
 
 from src.analysis.signal_engine import TradeOpportunity
+from src.toggles import is_any_buy_enabled
 from src.config import get_env, get_yaml_config
 from src.costs.calculator import CostCalculator
 from src.data.database import DailyPnL, Trade, get_session, init_db
@@ -46,6 +47,12 @@ class RiskManager:
             allowed, reason = DailyBacktestRunner().is_trading_allowed()
             if not allowed:
                 return False, reason
+
+        if not opportunity.is_recommended:
+            return False, "Buy trades disabled — app recommends SELL only"
+
+        if opportunity.trade_mode == "BUY_OPTION" and not is_any_buy_enabled(opportunity.instrument):
+            return False, "Buy CE/PE is off — enable in Settings if you accept the risk"
 
         profit_cfg = self.config.get("profit_mode", {})
         min_conf = profit_cfg.get("min_sell_confidence", 0.70) if opportunity.trade_mode == "SELL_OPTION" else 0.65

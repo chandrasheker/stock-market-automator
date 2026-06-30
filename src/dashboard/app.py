@@ -16,7 +16,14 @@ from src.analysis.signal_engine import SignalEngine
 from src.auth.kite_auth import KiteAuth
 from src.backtest.engine import BacktestEngine
 from src.config import get_env, get_yaml_config
-from src.toggles import load_toggles, save_toggles
+from src.toggles import (
+    apply_sell_only_defaults,
+    get_buy_warning_text,
+    get_sell_recommendation_text,
+    is_any_buy_enabled,
+    load_toggles,
+    save_toggles,
+)
 from src.dashboard.strategy_docs import BACKTEST_METHODOLOGY_MD, STRATEGY_LOGIC_MD
 from src.data.database import DailyPnL, Trade, TradeSignal, get_session, init_db
 from src.data.historical import HistoricalDataFetcher
@@ -231,40 +238,55 @@ def show_dashboard(env):
 
 def show_signals():
     st.title("Live Signal Scanner")
+    st.success(get_sell_recommendation_text())
+    if not is_any_buy_enabled():
+        st.caption("Buy CE/PE is **disabled**. The app will only suggest and execute **SELL** trades.")
 
     if st.button("Scan Now", type="primary"):
-        with st.spinner("Analyzing markets..."):
+        with st.spinner("Scanning for SELL opportunities..."):
             engine = SignalEngine()
-            opportunities = engine.scan_all()
+            opportunities = engine.scan_all(include_buy_suggestions=True)
 
-            if not opportunities:
-                st.warning("No high-confidence opportunities found right now.")
+            sells = [o for o in opportunities if o.is_recommended]
+            buys = [o for o in opportunities if not o.is_recommended]
+
+            if not sells and not buys:
+                st.warning("No opportunities found right now.")
                 return
 
-            for opp in opportunities:
-                with st.expander(
-                    f"{opp.instrument.upper()} — {opp.direction} "
-                    f"(Confidence: {opp.confidence:.0%})",
-                    expanded=True,
-                ):
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Entry Price", f"₹{opp.entry_price}")
-                    mode_label = "Target" if opp.trade_mode == "BUY_OPTION" else "Buy-back"
-                    c2.metric(mode_label, f"₹{opp.target_price}")
-                    c3.metric("Stop Loss", f"₹{opp.stop_loss}")
+            if sells:
+                st.subheader("✅ Recommended — SELL options")
+                for opp in sells:
+                    _render_opportunity(opp, recommended=True)
 
-                    st.markdown(
-                        f"**{opp.direction}** | Strike: {opp.strike} | "
-                        f"Lot: {opp.lot_size} | Est. costs: ₹{opp.estimated_costs:.0f}"
-                    )
-                    st.markdown(f"**Reasoning:** {opp.reasoning}")
+            if buys:
+                st.subheader("⚠️ Buy alternative (not recommended, will NOT execute)")
+                st.caption(get_buy_warning_text())
+                for opp in buys:
+                    _render_opportunity(opp, recommended=False)
 
-                    if opp.strategy_scores:
-                        st.markdown("**Strategy Breakdown:**")
-                        for name, scores in opp.strategy_scores.items():
-                            direction = scores.get("direction", "N/A")
-                            score = scores.get("score", 0)
-                            st.progress(min(1.0, abs(score)), text=f"{name}: {direction} ({score:+.2f})")
+
+def _render_opportunity(opp, recommended: bool):
+    border = "green" if recommended else "gray"
+    with st.expander(
+        f"{'✅' if recommended else '⚠️'} {opp.instrument.upper()} — {opp.direction} "
+        f"(Confidence: {opp.confidence:.0%})",
+        expanded=recommended,
+    ):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Premium", f"₹{opp.entry_price}")
+        c2.metric("Buy-back target" if opp.trade_mode == "SELL_OPTION" else "Target", f"₹{opp.target_price}")
+        c3.metric("Stop Loss", f"₹{opp.stop_loss}")
+        c4.metric("Est. Margin", f"₹{opp.estimated_margin:,.0f}")
+
+        st.markdown(
+            f"**Strike:** {opp.strike} | **Lot:** {opp.lot_size} | "
+            f"**Costs:** ₹{opp.estimated_costs:.0f} | **Est. net:** ₹{opp.expected_net_pnl:.0f}"
+        )
+        st.markdown(f"**{opp.recommendation_note}**")
+        st.markdown(f"**Reasoning:** {opp.reasoning}")
+        if not recommended:
+            st.warning("This buy trade will NOT be executed while buy is disabled.")
 
 
 def show_positions():
@@ -457,8 +479,20 @@ def show_backtest():
 def show_settings(env, config):
     st.title("Settings & Controls")
 
-    st.subheader("Instrument On/Off & Trade Types")
-    st.caption("Turn off Crude Oil if P&L is too low. Control each Buy/Sell × CE/PE separately.")
+    st.success(get_sell_recommendation_text())
+    st.warning(get_buy_warning_text())
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Reset to Sell-Only (Recommended)", type="primary"):
+            apply_sell_only_defaults()
+            st.success("Set to sell-only — buy disabled.")
+            st.rerun()
+    with col_b:
+        st.caption("Selling needs ~12% of spot × lot as margin in your Zerodha account.")
+
+    st.subheader("Instrument & Trade Type Toggles")
+    st.caption("Keep **Sell CE / Sell PE ON**. Buy toggles are optional and not recommended.")
 
     toggles = load_toggles()
     inst_names = {
@@ -471,11 +505,18 @@ def show_settings(env, config):
     for inst, label in inst_names.items():
         with st.expander(f"{label} — {'ON' if toggles[inst].get('enabled') else 'OFF'}", expanded=inst == "nifty50"):
             new_enabled = st.toggle(f"Enable {label}", value=toggles[inst].get("enabled", True), key=f"en_{inst}")
-            c1, c2, c3, c4 = st.columns(4)
-            buy_ce = c1.toggle("Buy CE", value=toggles[inst].get("buy_ce", True), key=f"bce_{inst}")
-            buy_pe = c2.toggle("Buy PE", value=toggles[inst].get("buy_pe", True), key=f"bpe_{inst}")
-            sell_ce = c3.toggle("Sell CE", value=toggles[inst].get("sell_ce", True), key=f"sce_{inst}")
-            sell_pe = c4.toggle("Sell PE", value=toggles[inst].get("sell_pe", True), key=f"spe_{inst}")
+
+            st.markdown("**✅ Recommended — Sell (collect premium)**")
+            c3, c4 = st.columns(2)
+            sell_ce = c3.toggle("Sell CE ✅", value=toggles[inst].get("sell_ce", True), key=f"sce_{inst}")
+            sell_pe = c4.toggle("Sell PE ✅", value=toggles[inst].get("sell_pe", True), key=f"spe_{inst}")
+
+            st.markdown("**⚠️ Not recommended — Buy (disabled by default)**")
+            c1, c2 = st.columns(2)
+            buy_ce = c1.toggle("Buy CE ⚠️", value=toggles[inst].get("buy_ce", False), key=f"bce_{inst}")
+            buy_pe = c2.toggle("Buy PE ⚠️", value=toggles[inst].get("buy_pe", False), key=f"bpe_{inst}")
+            if buy_ce or buy_pe:
+                st.warning("Buy is enabled — backtest showed losses. App still prefers SELL.")
 
             if (
                 new_enabled != toggles[inst].get("enabled")

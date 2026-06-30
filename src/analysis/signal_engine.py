@@ -13,7 +13,7 @@ from src.analysis.options_analyzer import OptionsAnalyzer
 from src.analysis.technical import TechnicalAnalyzer
 from src.backtest.entry_rules import EntryRuleEngine
 from src.config import get_env, get_yaml_config
-from src.toggles import is_action_enabled, is_instrument_enabled
+from src.toggles import is_action_enabled, is_any_buy_enabled, is_instrument_enabled
 from src.costs.calculator import CostCalculator
 from src.data.historical import HistoricalDataFetcher
 from src.data.news_fetcher import NewsFetcher
@@ -35,6 +35,9 @@ class TradeOpportunity:
     expected_net_pnl: float = 0.0
     strategy_scores: dict = field(default_factory=dict)
     reasoning: str = ""
+    is_recommended: bool = True
+    recommendation_note: str = ""
+    estimated_margin: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)
 
     @property
@@ -85,39 +88,138 @@ class SignalEngine:
         profit_cfg = self.config.get("profit_mode", {})
         self.min_sell_confidence = profit_cfg.get("min_sell_confidence", 0.70)
 
-    def scan_all(self) -> list[TradeOpportunity]:
+    def scan_all(self, include_buy_suggestions: bool = False) -> list[TradeOpportunity]:
+        """Return executable opportunities (sell-first). Optionally include buy as warnings."""
         opportunities = []
-        for instrument_key, cfg in self.config["instruments"].items():
+        for instrument_key in self.config["instruments"]:
             if not is_instrument_enabled(instrument_key):
                 continue
             try:
-                opp = self.scan_instrument(instrument_key)
-                if not opp:
-                    continue
-                min_conf = self.min_sell_confidence if opp.trade_mode == "SELL_OPTION" else self.min_confidence
-                if opp.confidence >= min_conf:
-                    opportunities.append(opp)
+                sell_opps = self._scan_sell_opportunities(instrument_key)
+                opportunities.extend(sell_opps)
+
+                if include_buy_suggestions:
+                    buy_shadow = self._scan_buy_shadow(instrument_key)
+                    if buy_shadow:
+                        opportunities.append(buy_shadow)
             except Exception as e:
                 logger.error(f"Scan failed for {instrument_key}: {e}")
-        return sorted(opportunities, key=lambda x: x.confidence, reverse=True)
+
+        # Recommended (sell) first, then non-recommended suggestions
+        return sorted(
+            opportunities,
+            key=lambda x: (not x.is_recommended, -x.confidence),
+        )
+
+    def _scan_sell_opportunities(self, instrument_key: str) -> list[TradeOpportunity]:
+        """Scan SELL CE / SELL PE — only recommended trades."""
+        cfg = self.config["instruments"][instrument_key]
+        news_key = self.INSTRUMENT_NEWS_MAP.get(instrument_key, instrument_key)
+
+        hist = self.data_fetcher.fetch_index_history(instrument_key)
+        if hist.empty or len(hist) < 30:
+            return []
+
+        df = self.technical.add_all_indicators(hist)
+        trend = self.technical.get_trend_signal(df)
+        breakout = self.technical.detect_breakout(df)
+        latest = df.iloc[-1]
+        vix = self.data_fetcher.fetch_india_vix()
+        news_sentiment = self.news.get_instrument_sentiment(news_key)
+
+        setup = self.entry_rules._evaluate_sell(
+            instrument_key, trend, breakout, latest, df,
+            self.entry_rules.get_instrument_config(instrument_key),
+            vix, news_sentiment,
+        )
+        if not setup:
+            return []
+
+        direction = setup["direction"]
+        opt_type = setup["opt_type"]
+        if not is_action_enabled(instrument_key, "SELL_OPTION", direction):
+            return []
+
+        opp = self._build_opportunity(
+            instrument_key,
+            trade_mode="SELL_OPTION",
+            direction=direction,
+            opt_type=opt_type,
+            is_recommended=True,
+            note="✅ Recommended — sell premium (profitable in backtest)",
+        )
+        return [opp] if opp else []
+
+    def _scan_buy_shadow(self, instrument_key: str) -> Optional[TradeOpportunity]:
+        """Show what a buy trade would look like — for suggestion only, not executed."""
+        if is_any_buy_enabled(instrument_key):
+            return None
+
+        for direction, opt_type in [("BULLISH", "CE"), ("BEARISH", "PE")]:
+            opp = self._build_opportunity(
+                instrument_key,
+                trade_mode="BUY_OPTION",
+                direction=direction,
+                opt_type=opt_type,
+                is_recommended=False,
+                note="⚠️ Buy disabled — not recommended. Use SELL instead.",
+                force_evaluate=True,
+            )
+            if opp:
+                return opp
+        return None
 
     def scan_instrument(self, instrument_key: str) -> Optional[TradeOpportunity]:
+        """Return best recommended (sell) opportunity for one instrument."""
+        sells = self._scan_sell_opportunities(instrument_key)
+        return sells[0] if sells else None
+
+    def _build_opportunity(
+        self,
+        instrument_key: str,
+        trade_mode: str,
+        direction: str,
+        opt_type: str,
+        is_recommended: bool,
+        note: str,
+        force_evaluate: bool = False,
+    ) -> Optional[TradeOpportunity]:
         cfg = self.config["instruments"][instrument_key]
         news_key = self.INSTRUMENT_NEWS_MAP.get(instrument_key, instrument_key)
         exchange = cfg.get("exchange", "NFO")
 
         hist = self.data_fetcher.fetch_index_history(instrument_key)
         if hist.empty or len(hist) < 30:
-            logger.warning(f"Insufficient history for {instrument_key}")
             return None
 
         df = self.technical.add_all_indicators(hist)
         trend = self.technical.get_trend_signal(df)
         breakout = self.technical.detect_breakout(df)
+        latest = df.iloc[-1]
+
+        if trade_mode == "SELL_OPTION":
+            vix = self.data_fetcher.fetch_india_vix()
+            news_sentiment = self.news.get_instrument_sentiment(
+                self.INSTRUMENT_NEWS_MAP.get(instrument_key, instrument_key)
+            )
+            setup = self.entry_rules._evaluate_sell(
+                instrument_key, trend, breakout, latest, df,
+                self.entry_rules.get_instrument_config(instrument_key),
+                vix, news_sentiment,
+            )
+            if not setup or setup.get("opt_type") != opt_type or setup.get("direction") != direction:
+                return None
+        else:
+            if not force_evaluate:
+                return None
+            # Shadow buy — check if trend supports this direction
+            if trend["direction"] != direction:
+                return None
+            if float(latest["adx"]) < 20:
+                return None
 
         chain_data = self.data_fetcher.fetch_option_chain_snapshot(cfg["underlying"])
         chain_analysis = self.options.analyze_chain(chain_data) if chain_data else {"valid": False}
-
         news_sentiment = self.news.get_instrument_sentiment(news_key)
         vix = self.data_fetcher.fetch_india_vix()
 
@@ -125,28 +227,12 @@ class SignalEngine:
             trend, breakout, chain_analysis, news_sentiment, vix, df
         )
 
-        setup = self.entry_rules.evaluate(
-            instrument_key, trend, breakout, df.iloc[-1], df,
-            vix=vix, news_sentiment=news_sentiment,
-        )
-        if not setup:
-            return None
-
-        trade_mode = setup["mode"]
-        opt_direction = setup["direction"]
-
-        if not is_action_enabled(instrument_key, trade_mode, opt_direction):
-            logger.debug(f"{instrument_key}: {trade_mode} {opt_direction} disabled by user toggle")
-            return None
-
-        opt_type = setup["opt_type"]
-
         confidence = self.entry_rules.compute_confidence(
-            instrument_key, trend, breakout, df.iloc[-1],
-            chain_analysis, news_sentiment, opt_direction,
+            instrument_key, trend, breakout, latest,
+            chain_analysis, news_sentiment, direction,
         )
         if trade_mode == "SELL_OPTION":
-            confidence = min(0.95, confidence + 0.05)
+            confidence = min(0.95, confidence + 0.08)
             min_conf = self.min_sell_confidence
         else:
             min_conf = self.min_confidence
@@ -156,56 +242,56 @@ class SignalEngine:
 
         underlying = chain_analysis.get("underlying", float(df["close"].iloc[-1]))
         chain_df = self.options.parse_option_chain(chain_data) if chain_data else pd.DataFrame()
-
-        if trade_mode == "SELL_OPTION":
-            strike_info = self.options.select_strike(
-                chain_df, opt_direction, underlying, otm_distance=2
-            )
-        else:
-            strike_info = self.options.select_strike(chain_df, opt_direction, underlying)
-
+        otm = 2 if trade_mode == "SELL_OPTION" else 1
+        strike_info = self.options.select_strike(chain_df, direction, underlying, otm_distance=otm)
         if not strike_info:
             return None
 
         entry = strike_info["premium"]
+        lot_size = cfg["lot_size"]
+
         if trade_mode == "SELL_OPTION":
             target = round(entry * (1 - self.sell_profit_target), 2)
             sl = round(entry * (1 + self.sell_stop_loss), 2)
-            direction = f"SELL_{strike_info['type']}"
+            dir_label = f"SELL_{strike_info['type']}"
+            # Rough margin estimate for index options (~12% of spot × lot)
+            est_margin = underlying * lot_size * 0.12
         else:
             target = round(entry * (1 + self.profit_target), 2)
             sl = round(entry * (1 - self.stop_loss), 2)
-            direction = f"BUY_{strike_info['type']}"
+            dir_label = f"BUY_{strike_info['type']}"
+            est_margin = entry * lot_size
 
-        # Cost gate — skip if charges eat the profit
-        approved, cost_info = self.costs.is_trade_worth_it(
-            entry, target, cfg["lot_size"], exchange, trade_mode
-        )
-        if not approved:
-            logger.info(
-                f"{instrument_key}: skipped — costs ₹{cost_info['total_costs']:.0f} "
-                f"vs gross ₹{cost_info['gross_pnl']:.0f}"
+        if is_recommended:
+            approved, cost_info = self.costs.is_trade_worth_it(
+                entry, target, lot_size, exchange, trade_mode
             )
-            return None
+            if not approved:
+                return None
+            est_costs = cost_info["total_costs"]
+            expected_net = cost_info["net_pnl"]
+        else:
+            est_costs = self.costs.estimate_round_trip_cost(entry, lot_size, exchange, trade_mode, 20)
+            expected_net = 0
+            cost_info = {"total_costs": est_costs, "net_pnl": 0}
 
         reasoning_parts = [
+            note,
             f"Mode: {trade_mode}",
             f"Trend: {trend['direction']} (strength {trend['strength']:.2f})",
-            f"Breakout: {breakout.get('direction', 'None')}",
         ]
         if chain_analysis.get("valid"):
             reasoning_parts.append(f"PCR: {chain_analysis['pcr']} ({chain_analysis['oi_signal']})")
-        reasoning_parts.append(
-            f"News: {news_sentiment['score']:.2f} ({news_sentiment['article_count']} articles)"
-        )
-        reasoning_parts.append(f"India VIX: {vix:.1f}")
-        reasoning_parts.append(
-            f"Costs: ₹{cost_info['total_costs']:.0f} | Net if target: ₹{cost_info['net_pnl']:.0f}"
-        )
+        reasoning_parts.append(f"News: {news_sentiment['score']:.2f}")
+        if is_recommended:
+            reasoning_parts.append(
+                f"Costs: ₹{cost_info['total_costs']:.0f} | Net if target: ₹{cost_info['net_pnl']:.0f}"
+            )
+            reasoning_parts.append(f"Est. margin required: ₹{est_margin:,.0f}")
 
         return TradeOpportunity(
             instrument=instrument_key,
-            direction=direction,
+            direction=dir_label,
             trade_mode=trade_mode,
             confidence=confidence,
             entry_price=entry,
@@ -213,11 +299,14 @@ class SignalEngine:
             stop_loss=sl,
             strike=strike_info["strike"],
             expiry=strike_info.get("expiry", ""),
-            lot_size=cfg["lot_size"],
-            estimated_costs=cost_info["total_costs"],
-            expected_net_pnl=cost_info["net_pnl"],
+            lot_size=lot_size,
+            estimated_costs=est_costs,
+            expected_net_pnl=expected_net,
             strategy_scores=scores,
             reasoning=" | ".join(reasoning_parts),
+            is_recommended=is_recommended,
+            recommendation_note=note,
+            estimated_margin=est_margin,
         )
 
     def _score_strategies(self, trend, breakout, chain, news, vix, df) -> dict:

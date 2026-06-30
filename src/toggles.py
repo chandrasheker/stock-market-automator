@@ -65,7 +65,48 @@ def is_action_enabled(instrument: str, trade_mode: str, direction: str) -> bool:
     return toggles.get(key, True)
 
 
-def direction_to_label(trade_mode: str, direction: str) -> str:
-    if trade_mode == "BUY_OPTION":
-        return f"BUY {'CE' if direction == 'BULLISH' else 'PE'}"
-    return f"SELL {'CE' if direction == 'BEARISH' else 'PE'}"
+def is_any_buy_enabled(instrument: str | None = None) -> bool:
+    toggles = load_toggles()
+    instruments = [instrument] if instrument else list(toggles.keys())
+    for inst in instruments:
+        t = toggles.get(inst, {})
+        if t.get("enabled") and (t.get("buy_ce") or t.get("buy_pe")):
+            return True
+    return False
+
+
+def is_any_sell_enabled(instrument: str | None = None) -> bool:
+    toggles = load_toggles()
+    instruments = [instrument] if instrument else list(toggles.keys())
+    for inst in instruments:
+        t = toggles.get(inst, {})
+        if t.get("enabled") and (t.get("sell_ce") or t.get("sell_pe")):
+            return True
+    return False
+
+
+def get_sell_recommendation_text() -> str:
+    return (
+        "Recommended: **SELL** OTM options (collect premium). "
+        "Backtest: 97% win rate, net positive after taxes. "
+        "Selling needs higher margin in your account but is the profitable strategy."
+    )
+
+
+def get_buy_warning_text() -> str:
+    return (
+        "Buy CE/PE is **not recommended** — backtest showed losses on NIFTY/SENSEX. "
+        "Lower margin needed, but historically unprofitable. Enable only if you accept the risk."
+    )
+
+
+def apply_sell_only_defaults():
+    """Reset toggles to recommended sell-only configuration."""
+    toggles = _default_toggles()
+    for inst in toggles:
+        toggles[inst]["buy_ce"] = False
+        toggles[inst]["buy_pe"] = False
+        toggles[inst]["sell_ce"] = toggles[inst].get("enabled", True)
+        toggles[inst]["sell_pe"] = toggles[inst].get("enabled", True)
+    save_toggles(toggles)
+    return toggles
