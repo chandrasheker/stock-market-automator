@@ -77,3 +77,44 @@ data:
   history_days: 365
   cache_dir: data/cache
   db_path: data/trading.db
+
+# Backtest-optimized entry rules (tuned on 1 year historical data)
+backtest:
+  defaults:
+    profit_target_pct: 20.0
+    stop_loss_pct: 12.0
+    max_hold_days: 5
+    min_strength: 0.4
+    min_adx: 22
+    min_confirms: 3
+    min_confidence: 0.65
+    max_atr_pct: 0.03
+    strategy: trend_continuation
+    rsi_bull_min: 50
+    rsi_bull_max: 65
+    rsi_bear_min: 35
+    rsi_bear_max: 50
+  instruments:
+    nifty50:
+      strategy: trend_continuation
+      min_adx: 20
+      min_confirms: 3
+      stop_loss_pct: 10.0
+      max_hold_days: 7
+      max_atr_pct: 0.03
+    sensex:
+      strategy: trend_continuation
+      min_adx: 18
+      min_confirms: 3
+      stop_loss_pct: 10.0
+      max_hold_days: 4
+      max_atr_pct: 0.03
+    crude_oil:
+      strategy: pullback_entry
+      min_adx: 18
+      stop_loss_pct: 10.0
+      max_hold_days: 5
+      rsi_pullback_bull_min: 40
+      rsi_pullback_bull_max: 55
+      rsi_pullback_bear_min: 45
+      rsi_pullback_bear_max: 60

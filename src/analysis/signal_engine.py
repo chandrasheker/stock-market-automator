@@ -11,6 +11,7 @@ from loguru import logger
 
 from src.analysis.options_analyzer import OptionsAnalyzer
 from src.analysis.technical import TechnicalAnalyzer
+from src.backtest.entry_rules import EntryRuleEngine
 from src.config import get_env, get_yaml_config
 from src.data.historical import HistoricalDataFetcher
 from src.data.news_fetcher import NewsFetcher
@@ -58,10 +59,14 @@ class SignalEngine:
         self.env = get_env()
         self.technical = TechnicalAnalyzer()
         self.options = OptionsAnalyzer()
+        self.entry_rules = EntryRuleEngine()
         self.data_fetcher = HistoricalDataFetcher()
         self.news = NewsFetcher()
         self.profit_target = self.env.profit_target_pct / 100
         self.stop_loss = self.env.stop_loss_pct / 100
+        self.min_confidence = self.config.get("backtest", {}).get("defaults", {}).get(
+            "min_confidence", 0.65
+        )
 
     def scan_all(self) -> list[TradeOpportunity]:
         opportunities = []
@@ -70,7 +75,7 @@ class SignalEngine:
                 continue
             try:
                 opp = self.scan_instrument(instrument_key)
-                if opp and opp.confidence >= 0.65:
+                if opp and opp.confidence >= self.min_confidence:
                     opportunities.append(opp)
             except Exception as e:
                 logger.error(f"Scan failed for {instrument_key}: {e}")
@@ -99,15 +104,20 @@ class SignalEngine:
             trend, breakout, chain_analysis, news_sentiment, vix, df
         )
 
-        combined = self._combine_scores(scores)
-        if combined["confidence"] < 0.55:
+        entry_direction = self.entry_rules.evaluate(
+            instrument_key, trend, breakout, df.iloc[-1], df
+        )
+        if not entry_direction:
             return None
 
-        direction = combined["direction"]
-        if direction == "NEUTRAL":
+        confidence = self.entry_rules.compute_confidence(
+            instrument_key, trend, breakout, df.iloc[-1],
+            chain_analysis, news_sentiment, entry_direction,
+        )
+        if confidence < self.min_confidence:
             return None
 
-        opt_direction = "BULLISH" if direction == "BULLISH" else "BEARISH"
+        opt_direction = entry_direction
         underlying = chain_analysis.get("underlying", float(df["close"].iloc[-1]))
 
         chain_df = self.options.parse_option_chain(chain_data) if chain_data else pd.DataFrame()
@@ -134,7 +144,7 @@ class SignalEngine:
         return TradeOpportunity(
             instrument=instrument_key,
             direction=f"BUY_{strike_info['type']}",
-            confidence=combined["confidence"],
+            confidence=confidence,
             entry_price=entry,
             target_price=target,
             stop_loss=sl,

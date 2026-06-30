@@ -192,7 +192,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Indian Options Trading Automator")
     parser.add_argument("command", choices=["run", "login", "scan", "download", "backtest"])
-    parser.add_argument("--instrument", default="nifty50")
+    parser.add_argument("--instrument", default="all")
     args = parser.parse_args()
 
     bot = TradingBot()
@@ -209,12 +209,25 @@ def main():
             print(f"  {o.reasoning}")
     elif args.command == "backtest":
         from src.backtest.engine import BacktestEngine
-        df = bot.data_fetcher.fetch_index_history(args.instrument)
-        result = BacktestEngine().run(df)
-        print(f"\nBacktest Results for {args.instrument}:")
-        print(f"  Trades: {result.total_trades} | Win Rate: {result.win_rate:.0%}")
-        print(f"  Total PnL: ₹{result.total_pnl:,.0f} | Max DD: {result.max_drawdown:.1f}%")
-        print(f"  Sharpe: {result.sharpe_ratio:.2f} | Profit Factor: {result.profit_factor:.2f}")
+
+        engine = BacktestEngine()
+        if args.instrument == "all":
+            combined = engine.run_all()
+            engine.print_report(combined)
+        else:
+            df = bot.data_fetcher.fetch_index_history(args.instrument)
+            result = engine.run(df, args.instrument)
+            print(f"\nBacktest Results for {args.instrument}:")
+            print(f"  Trades: {result.total_trades} | Win Rate: {result.win_rate:.1%}")
+            print(f"  Total PnL: ₹{result.total_pnl:,.0f} | Max DD: {result.max_drawdown:.1f}%")
+            print(f"  Sharpe: {result.sharpe_ratio:.2f} | Profit Factor: {result.profit_factor:.2f}")
+            print(f"  Targets: {result.target_hits} | Stop Losses: {result.stop_loss_hits} | Time Exits: {result.time_exits}")
+            if result.trades:
+                print(f"\n  Recent trades:")
+                for t in result.trades[-5:]:
+                    status = "WIN" if t.win else "LOSS"
+                    print(f"    {t.entry_date[:10]} {t.direction} ₹{t.entry_price}→₹{t.exit_price} "
+                          f"({t.pnl_pct:+.1f}%) [{t.exit_reason}] {status}")
     elif args.command == "run":
         signal.signal(signal.SIGINT, lambda s, f: bot.stop())
         signal.signal(signal.SIGTERM, lambda s, f: bot.stop())

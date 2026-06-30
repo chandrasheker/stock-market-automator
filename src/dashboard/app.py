@@ -217,28 +217,79 @@ def show_news():
 
 def show_backtest():
     st.title("Strategy Backtest")
-    instrument = st.selectbox("Instrument", ["nifty50", "sensex", "crude_oil"])
+    instrument = st.selectbox(
+        "Instrument", ["all", "nifty50", "sensex", "crude_oil"]
+    )
 
-    if st.button("Run Backtest"):
-        with st.spinner("Running backtest on historical data..."):
+    if st.button("Run Backtest", type="primary"):
+        with st.spinner("Running backtest on 1 year of historical data..."):
+            from src.backtest.engine import BacktestEngine
+
+            engine = BacktestEngine()
             fetcher = HistoricalDataFetcher()
-            df = fetcher.fetch_index_history(instrument, days=365)
-            result = BacktestEngine().run(df)
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Trades", result.total_trades)
-            c2.metric("Win Rate", f"{result.win_rate:.0%}")
-            c3.metric("Total P&L", f"₹{result.total_pnl:,.0f}")
-            c4.metric("Max Drawdown", f"{result.max_drawdown:.1f}%")
+            if instrument == "all":
+                combined = engine.run_all()
+                st.success(
+                    f"Combined Win Rate: **{combined.combined_win_rate:.1%}** "
+                    f"across {combined.combined_trades} trades"
+                )
 
-            c5, c6, c7 = st.columns(3)
-            c5.metric("Sharpe Ratio", f"{result.sharpe_ratio:.2f}")
-            c6.metric("Profit Factor", f"{result.profit_factor:.2f}")
-            c7.metric("Avg Profit", f"₹{result.avg_profit:,.0f}")
+                cols = st.columns(3)
+                cols[0].metric("Combined Win Rate", f"{combined.combined_win_rate:.1%}")
+                cols[1].metric("Total Trades", combined.combined_trades)
+                cols[2].metric("Total P&L", f"₹{combined.combined_pnl:,.0f}")
 
-            if result.trades:
-                st.subheader("Trade Log")
-                st.dataframe(pd.DataFrame(result.trades), use_container_width=True)
+                for inst, result in combined.instruments.items():
+                    name = get_yaml_config()["instruments"][inst]["index_name"]
+                    with st.expander(f"{name} — {result.win_rate:.1%} win rate ({result.total_trades} trades)"):
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Win Rate", f"{result.win_rate:.1%}")
+                        c2.metric("P&L", f"₹{result.total_pnl:,.0f}")
+                        c3.metric("Profit Factor", f"{result.profit_factor:.2f}")
+                        c4.metric("Max Drawdown", f"{result.max_drawdown:.1f}%")
+                        if result.trades:
+                            trade_rows = [{
+                                "Entry": t.entry_date[:10],
+                                "Direction": t.direction,
+                                "Entry ₹": t.entry_price,
+                                "Exit ₹": t.exit_price,
+                                "PnL%": f"{t.pnl_pct:+.1f}%",
+                                "Exit": t.exit_reason,
+                                "Result": "WIN" if t.win else "LOSS",
+                            } for t in result.trades]
+                            st.dataframe(pd.DataFrame(trade_rows), use_container_width=True)
+            else:
+                df = fetcher.fetch_index_history(instrument)
+                result = engine.run(df, instrument)
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total Trades", result.total_trades)
+                c2.metric("Win Rate", f"{result.win_rate:.1%}")
+                c3.metric("Total P&L", f"₹{result.total_pnl:,.0f}")
+                c4.metric("Max Drawdown", f"{result.max_drawdown:.1f}%")
+
+                c5, c6, c7 = st.columns(3)
+                c5.metric("Sharpe Ratio", f"{result.sharpe_ratio:.2f}")
+                c6.metric("Profit Factor", f"{result.profit_factor:.2f}")
+                c7.metric("20% Targets Hit", result.target_hits)
+
+                if result.trades:
+                    st.subheader("Trade Log")
+                    st.dataframe(
+                        pd.DataFrame([{
+                            "Entry": t.entry_date[:10],
+                            "Exit": t.exit_date[:10],
+                            "Direction": t.direction,
+                            "Entry ₹": t.entry_price,
+                            "Exit ₹": t.exit_price,
+                            "PnL": t.pnl,
+                            "PnL%": f"{t.pnl_pct:+.1f}%",
+                            "Exit Reason": t.exit_reason,
+                            "Result": "WIN" if t.win else "LOSS",
+                        } for t in result.trades]),
+                        use_container_width=True,
+                    )
 
 
 def show_settings(env, config):
