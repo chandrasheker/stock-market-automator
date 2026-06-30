@@ -34,18 +34,43 @@ class TimeWindowFilter:
     def _now(self) -> dt_time:
         return ist_time()
 
+    def _windows(self, instrument: str) -> dict:
+        """Instrument-aware session/entry windows (MCX crude runs much later)."""
+        if instrument == "crude_oil":
+            mcx = self.cfg.get("crude", {})
+            return {
+                "open": mcx.get("market_open", "09:00"),
+                "close": mcx.get("market_close", "23:30"),
+                "no_entry_before": mcx.get("no_entry_before", "09:15"),
+                "no_entry_after": mcx.get("no_entry_after", "23:00"),
+                "force_exit_before": mcx.get("force_exit_before", "23:25"),
+                "avoid_opening": mcx.get("avoid_opening_volatility", False),
+            }
+        return {
+            "open": self.trading.get("market_open", "09:15"),
+            "close": self.trading.get("market_close", "15:30"),
+            "no_entry_before": self.cfg.get("no_entry_before", "09:30"),
+            "no_entry_after": self.cfg.get("no_entry_after", "15:15"),
+            "force_exit_before": self.cfg.get(
+                "force_exit_before",
+                get_yaml_config().get("exit_rules", {}).get("force_close_before", "15:20"),
+            ),
+            "avoid_opening": self.cfg.get("avoid_opening_volatility", True),
+        }
+
     def is_market_open(self, instrument: str = "nifty50") -> bool:
         now = ist_now()
         if now.weekday() >= 5:
             return False
-        if instrument == "crude_oil":
-            return dt_time(9, 0) <= now.time() <= dt_time(23, 30)
-        open_t = self._parse_time(self.trading.get("market_open", "09:15"))
-        close_t = self._parse_time(self.trading.get("market_close", "15:30"))
-        return open_t <= now.time() <= close_t
+        w = self._windows(instrument)
+        return self._parse_time(w["open"]) <= now.time() <= self._parse_time(w["close"])
 
-    def get_session_phase(self) -> str:
+    def get_session_phase(self, instrument: str = "nifty50") -> str:
         now = self._now()
+        if instrument == "crude_oil":
+            if not self.is_market_open(instrument):
+                return "closed"
+            return "commodity"
         for phase, (start, end) in self.PHASES.items():
             if self._parse_time(start) <= now < self._parse_time(end):
                 return phase
@@ -59,33 +84,40 @@ class TimeWindowFilter:
             return False, "Market closed"
 
         now = self._now()
-        no_before = self._parse_time(self.cfg.get("no_entry_before", "09:30"))
-        no_after = self._parse_time(self.cfg.get("no_entry_after", "15:15"))
+        w = self._windows(instrument)
+        no_before = self._parse_time(w["no_entry_before"])
+        no_after = self._parse_time(w["no_entry_after"])
 
         if now < no_before:
             return False, f"Opening volatility window — no entries before {no_before.strftime('%H:%M')} IST"
 
         if now >= no_after:
-            return False, f"Late session — no new intraday entries after {no_after.strftime('%H:%M')} IST"
+            return False, f"Late session — no new entries after {no_after.strftime('%H:%M')} IST"
 
-        phase = self.get_session_phase()
-        if phase == "opening" and self.cfg.get("avoid_opening_volatility", True):
-            return False, "Avoid 9:15–9:30 opening volatility"
+        # Opening-volatility skip (first 15 min) — indices by default
+        if w["avoid_opening"]:
+            open_t = self._parse_time(w["open"])
+            cutoff = self._parse_time(self._add_minutes(w["open"], 15))
+            if open_t <= now < cutoff:
+                return False, f"Avoid first 15 min after {open_t.strftime('%H:%M')} open"
 
-        return True, f"OK ({phase} session)"
+        return True, f"OK ({self.get_session_phase(instrument)} session)"
+
+    @staticmethod
+    def _add_minutes(hhmm: str, minutes: int) -> str:
+        h, m = map(int, hhmm.split(":"))
+        total = h * 60 + m + minutes
+        return f"{(total // 60) % 24:02d}:{total % 60:02d}"
 
     def requires_force_exit(self, instrument: str = "nifty50") -> bool:
         if not self.is_market_open(instrument):
             return True
-        force_before = self.cfg.get(
-            "force_exit_before",
-            get_yaml_config().get("exit_rules", {}).get("force_close_before", "15:20"),
-        )
-        return self._now() >= self._parse_time(force_before)
+        w = self._windows(instrument)
+        return self._now() >= self._parse_time(w["force_exit_before"])
 
-    def preferred_strategy_hint(self) -> str:
+    def preferred_strategy_hint(self, instrument: str = "nifty50") -> str:
         """Suggest trend vs range selling based on time of day."""
-        phase = self.get_session_phase()
+        phase = self.get_session_phase(instrument)
         if phase == "trend":
             return "trend"
         if phase == "range":

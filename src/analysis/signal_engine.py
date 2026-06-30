@@ -195,6 +195,28 @@ class SignalEngine:
         sells = self._scan_sell_opportunities(instrument_key)
         return sells[0] if sells else None
 
+    def scan_status(self) -> list[dict]:
+        """Fast per-instrument scanner status (no network) for the dashboard."""
+        statuses = []
+        for inst in self.config.get("instruments", {}):
+            label = self.config["instruments"][inst].get("index_name", inst)
+            if not is_instrument_enabled(inst):
+                statuses.append({"instrument": label, "state": "OFF",
+                                 "detail": "Disabled — enable in Settings"})
+                continue
+            mkt_ok, _ = self.pipeline.check_market_hours(inst)
+            if not mkt_ok:
+                statuses.append({"instrument": label, "state": "Market closed",
+                                 "detail": "Outside this instrument's market hours"})
+                continue
+            ent_ok, reason = self.pipeline.check_entry_timing(inst)
+            if not ent_ok:
+                statuses.append({"instrument": label, "state": "Waiting", "detail": reason})
+                continue
+            statuses.append({"instrument": label, "state": "Scanning",
+                             "detail": "Live — evaluating setups & liquidity"})
+        return statuses
+
     @staticmethod
     def _days_to_expiry(chain_df) -> float:
         """Real calendar days to the chain's nearest expiry (min 1, default 7)."""
@@ -356,7 +378,7 @@ class SignalEngine:
         reasoning_parts = [
             note,
             f"Mode: {trade_mode}",
-            f"Session: {self.pipeline.time.get_session_phase()}",
+            f"Session: {self.pipeline.time.get_session_phase(instrument_key)}",
             f"Trend: {trend['direction']} (strength {trend['strength']:.2f})",
         ]
         if strike_info.get("delta"):

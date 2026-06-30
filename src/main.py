@@ -194,14 +194,19 @@ class TradingBot:
             logger.error(f"Daily backtest failed: {e}")
 
     def _is_market_hours(self) -> bool:
-        from src.utils.clock import ist_now
+        """True if ANY enabled instrument's market is currently open (IST).
 
-        now = ist_now()
-        if now.weekday() >= 5:
-            return False
-        market_open = dt_time(9, 15)
-        market_close = dt_time(15, 30)
-        return market_open <= now.time() <= market_close
+        This lets the bot keep scanning in the evening for MCX crude even
+        after the index session (9:15–15:30) has closed.
+        """
+        from src.filters.time_window import TimeWindowFilter
+        from src.toggles import is_instrument_enabled
+
+        tw = TimeWindowFilter()
+        for inst in self.config.get("instruments", {}):
+            if is_instrument_enabled(inst) and tw.is_market_open(inst):
+                return True
+        return False
 
     def download_history(self):
         logger.info("Downloading historical data for all instruments...")

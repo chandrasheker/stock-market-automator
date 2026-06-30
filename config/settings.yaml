@@ -180,13 +180,20 @@ liquidity:
     crude_oil:
       min_oi: 1000
 
-# Time-of-day filters
+# Time-of-day filters (index session). Crude (MCX) has its own window below.
 time_filters:
   enabled: true
   no_entry_before: "09:30"   # avoid opening volatility
   no_entry_after: "15:15"    # no new intraday entries
   force_exit_before: "15:20" # close all MIS before close
   avoid_opening_volatility: true
+  crude:                     # MCX crude oil runs 9 AM–11:30 PM IST
+    market_open: "09:00"
+    market_close: "23:30"
+    no_entry_before: "09:15"
+    no_entry_after: "23:00"
+    force_exit_before: "23:25"
+    avoid_opening_volatility: false
 
 # Delta-based strike selection
 strike_selection:

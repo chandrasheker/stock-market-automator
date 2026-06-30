@@ -70,4 +70,4 @@ class TradePipeline:
             if not ok:
                 return False, msg
 
-        return True, f"Pre-checks passed ({self.time.get_session_phase()} session)"
+        return True, f"Pre-checks passed ({self.time.get_session_phase(instrument)} session)"

@@ -556,16 +556,40 @@ def show_signals():
     if not is_any_buy_enabled():
         st.caption("Buy CE/PE is **disabled**. The app will only suggest and execute **SELL** trades.")
 
-    if st.button("Scan Now", type="primary"):
-        with st.spinner("Scanning for SELL opportunities..."):
-            engine = SignalEngine()
+    from streamlit_autorefresh import st_autorefresh
+
+    auto = st.toggle("Real-time auto-scan (20s)", value=False, key="sig_auto")
+    if auto:
+        st_autorefresh(interval=20000, key="sig_refresh")
+
+    engine = SignalEngine()
+
+    # Per-instrument scanner status — shows it IS covering all three
+    st.subheader("Scanner Status")
+    status = engine.scan_status()
+    cols = st.columns(len(status)) if status else []
+    state_icon = {"Scanning": "🟢", "Waiting": "🟡", "Market closed": "🔴", "OFF": "⚪"}
+    for col, s in zip(cols, status):
+        col.markdown(
+            f"**{s['instrument']}**\n\n{state_icon.get(s['state'], '⚪')} {s['state']}\n\n"
+            f"<span style='font-size:0.8rem;opacity:0.8'>{s['detail']}</span>",
+            unsafe_allow_html=True,
+        )
+
+    run = auto or st.button("Scan Now", type="primary")
+    if run:
+        with st.spinner("Scanning NIFTY, SENSEX and Crude for SELL opportunities..."):
             opportunities = engine.scan_all(include_buy_suggestions=True)
 
             sells = [o for o in opportunities if o.is_recommended]
             buys = [o for o in opportunities if not o.is_recommended]
 
             if not sells and not buys:
-                st.warning("No opportunities found right now.")
+                st.info(
+                    "No qualifying setups right now across the live instruments. "
+                    "The bot only fires on genuine edge — see the status above for why "
+                    "each instrument is or isn't trading."
+                )
                 return
 
             if sells:
