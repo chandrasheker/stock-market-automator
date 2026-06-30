@@ -63,8 +63,8 @@ def main():
     page = st.sidebar.radio(
         "Navigation",
         [
-            "Dashboard", "Option Chain", "TradingView", "Live Signals", "Strategy Logic",
-            "Positions", "News", "Backtest", "Daily Report", "Settings",
+            "Dashboard", "Trade Ideas", "Option Chain", "TradingView", "Live Signals",
+            "Strategy Logic", "Positions", "News", "Backtest", "Daily Report", "Settings",
         ],
     )
 
@@ -79,6 +79,8 @@ def main():
 
     if page == "Dashboard":
         show_dashboard(env)
+    elif page == "Trade Ideas":
+        show_trade_ideas(env, config)
     elif page == "Option Chain":
         show_option_chain(config)
     elif page == "TradingView":
@@ -293,8 +295,165 @@ def show_strategy_logic():
     st.markdown(BACKTEST_METHODOLOGY_MD)
 
 
+def _trading_guard_status(env):
+    """Return live capital-protection status: is it safe to trade right now?"""
+    from src.backtest.daily_runner import DailyBacktestRunner
+
+    risk = RiskManager()
+    summary = risk.get_risk_summary()
+    reasons = []
+    allowed = True
+
+    if summary["kill_switch"]:
+        allowed = False
+        reasons.append("Kill switch is ON")
+
+    try:
+        bt_allowed, bt_reason = DailyBacktestRunner().is_trading_allowed()
+        if not bt_allowed:
+            allowed = False
+            reasons.append(bt_reason)
+    except Exception:
+        pass
+
+    daily_pnl = summary["daily_pnl"]
+    loss_limit = summary["daily_loss_limit"]
+    if daily_pnl <= -loss_limit:
+        allowed = False
+        reasons.append(f"Daily loss limit hit (₹{daily_pnl:,.0f})")
+
+    consec = summary.get("consecutive_losses", 0)
+    max_consec = summary.get("max_consecutive_losses", 3)
+    if consec >= max_consec:
+        allowed = False
+        reasons.append(f"{consec} losses in a row — cooling off")
+
+    if summary["open_positions"] >= summary["max_positions"]:
+        reasons.append("Max open positions reached")
+
+    loss_budget_left = max(0, loss_limit + daily_pnl)
+    return {
+        "allowed": allowed,
+        "reasons": reasons,
+        "daily_pnl": daily_pnl,
+        "loss_budget_left": loss_budget_left,
+        "loss_limit": loss_limit,
+        "open_positions": summary["open_positions"],
+        "max_positions": summary["max_positions"],
+        "consecutive_losses": consec,
+    }
+
+
+def _render_capital_banner(env):
+    status = _trading_guard_status(env)
+    if status["allowed"]:
+        st.success(
+            f"🟢 **Safe to trade** · Loss budget left today: ₹{status['loss_budget_left']:,.0f} "
+            f"· Open: {status['open_positions']}/{status['max_positions']}"
+            + (f" · ⚠️ {'; '.join(status['reasons'])}" if status["reasons"] else "")
+        )
+    else:
+        st.error(
+            f"🔴 **Trading paused to protect capital** — {'; '.join(status['reasons'])}. "
+            f"Loss budget left: ₹{status['loss_budget_left']:,.0f}"
+        )
+    return status
+
+
+def _verdict_style(verdict: str) -> tuple[str, str]:
+    return {
+        "STRONG": ("🟢", "#0f5132"),
+        "GOOD": ("🟢", "#146c43"),
+        "FAIR": ("🟡", "#664d03"),
+        "AVOID": ("🔴", "#842029"),
+    }.get(verdict, ("⚪", "#333"))
+
+
+def _render_trade_idea_card(opp, rank: int, can_trade: bool):
+    icon, color = _verdict_style(opp.verdict)
+    action = "SELL" if opp.trade_mode == "SELL_OPTION" else "BUY"
+    opt = opp.direction.split("_")[-1]
+    name = opp.instrument.upper().replace("NIFTY50", "NIFTY").replace("CRUDE_OIL", "CRUDE")
+
+    st.markdown(
+        f"<div style='border-left:6px solid {color};padding:10px 16px;margin:8px 0;"
+        f"background:rgba(255,255,255,0.03);border-radius:6px;'>"
+        f"<span style='font-size:1.1rem;font-weight:700;'>{icon} #{rank} {action} "
+        f"{name} {int(opp.strike)} {opt}</span> "
+        f"<span style='float:right;font-weight:700;color:{color};'>{opp.verdict} · "
+        f"edge {opp.edge_score:.0f}/100</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Premium", f"₹{opp.entry_price:.1f}")
+    c2.metric("Prob. of Profit", f"{opp.pop:.0%}")
+    c3.metric("Net if target", f"₹{opp.expected_net_pnl:,.0f}")
+    c4.metric("Risk (SL)", f"₹{opp.max_loss:,.0f}")
+    c5.metric("Expected Value", f"₹{opp.expected_value:,.0f}")
+
+    c6, c7, c8, c9 = st.columns(4)
+    c6.metric("Confidence", f"{opp.confidence:.0%}")
+    c7.metric("Delta", f"{opp.delta:.2f}" if opp.delta else "—")
+    c8.metric("IV %ile", f"{opp.iv_percentile:.0f}")
+    c9.metric("Margin", f"₹{opp.estimated_margin:,.0f}")
+
+    st.markdown(f"**👉 {opp.headline}**")
+    st.caption(opp.reasoning)
+    if action == "BUY":
+        st.warning("Buy idea is informational — it will NOT auto-execute while buy is disabled.")
+    if not can_trade:
+        st.caption("⚠️ Capital protection is active — the bot will not place this automatically right now.")
+    st.divider()
+
+
+def show_trade_ideas(env, config):
+    st.title("Live Trade Ideas")
+    st.caption("Ranked, profit-positive suggestions — best edge first. Updates during market hours.")
+
+    from streamlit_autorefresh import st_autorefresh
+
+    auto = st.toggle("Auto-refresh (15s)", value=False, key="ideas_auto")
+    if auto:
+        st_autorefresh(interval=15000, key="ideas_refresh")
+
+    status = _render_capital_banner(env)
+
+    show_buy = st.toggle("Also show BUY ideas (info only)", value=False, key="ideas_show_buy")
+    min_edge = st.slider("Minimum edge score", 30, 80, 45, 5, key="ideas_min_edge")
+
+    with st.spinner("Analyzing live market for the best edges..."):
+        try:
+            engine = SignalEngine()
+            ideas = engine.get_trade_ideas(include_buy=show_buy, min_edge=float(min_edge))
+        except Exception as e:
+            st.error(f"Could not scan: {e}")
+            return
+
+    if not ideas:
+        st.info(
+            "No high-quality trade ideas right now. The bot stays in cash rather than "
+            "forcing a low-edge trade — that's how it protects you from losses."
+        )
+        return
+
+    strong = [o for o in ideas if o.verdict == "STRONG"]
+    if strong:
+        st.subheader(f"🔥 {len(strong)} high-conviction setup(s)")
+
+    for i, opp in enumerate(ideas, 1):
+        _render_trade_idea_card(opp, i, status["allowed"])
+
+    st.caption(
+        "POP = probability of profit (from option delta). Expected Value already "
+        "accounts for STT/GST/brokerage and the stop-loss scenario. Only positive-EV "
+        "ideas are shown."
+    )
+
+
 def show_dashboard(env):
     st.title("Trading Dashboard")
+    _render_capital_banner(env)
     risk = RiskManager()
     summary = risk.get_risk_summary()
 
@@ -306,6 +465,27 @@ def show_dashboard(env):
 
     st.divider()
 
+    st.subheader("Best Idea Right Now")
+    try:
+        engine = SignalEngine()
+        ideas = engine.get_trade_ideas(include_buy=False)
+        if ideas:
+            top = ideas[0]
+            icon, color = _verdict_style(top.verdict)
+            st.markdown(f"### {icon} {top.headline}")
+            cc1, cc2, cc3, cc4 = st.columns(4)
+            cc1.metric("Verdict", top.verdict)
+            cc2.metric("Edge", f"{top.edge_score:.0f}/100")
+            cc3.metric("Prob. of Profit", f"{top.pop:.0%}")
+            cc4.metric("Expected Value", f"₹{top.expected_value:,.0f}")
+            st.caption("See the **Trade Ideas** page for the full ranked list.")
+        else:
+            st.info("No high-edge setups right now — staying in cash protects your capital.")
+    except Exception as e:
+        st.caption(f"Idea scan unavailable: {e}")
+
+    st.divider()
+
     col_left, col_right = st.columns(2)
 
     with col_left:
@@ -314,15 +494,15 @@ def show_dashboard(env):
         for key, cfg in get_yaml_config()["instruments"].items():
             if not load_toggles().get(key, {}).get("enabled", True):
                 continue
-                try:
-                    df = fetcher.fetch_index_history(key, days=30)
-                    if not df.empty:
-                        latest = df.iloc[-1]
-                        prev = df.iloc[-2] if len(df) > 1 else latest
-                        change = ((latest["close"] - prev["close"]) / prev["close"]) * 100
-                        st.metric(cfg["index_name"], f"₹{latest['close']:,.2f}", f"{change:+.2f}%")
-                except Exception:
-                    st.warning(f"Could not load {cfg['index_name']}")
+            try:
+                df = fetcher.fetch_index_history(key, days=30)
+                if not df.empty:
+                    latest = df.iloc[-1]
+                    prev = df.iloc[-2] if len(df) > 1 else latest
+                    change = ((latest["close"] - prev["close"]) / prev["close"]) * 100
+                    st.metric(cfg["index_name"], f"₹{latest['close']:,.2f}", f"{change:+.2f}%")
+            except Exception:
+                st.warning(f"Could not load {cfg['index_name']}")
 
         vix = fetcher.fetch_india_vix()
         if vix:
@@ -382,21 +562,31 @@ def show_signals():
 
 
 def _render_opportunity(opp, recommended: bool):
-    border = "green" if recommended else "gray"
+    icon, color = _verdict_style(getattr(opp, "verdict", "FAIR"))
     with st.expander(
-        f"{'✅' if recommended else '⚠️'} {opp.instrument.upper()} — {opp.direction} "
-        f"(Confidence: {opp.confidence:.0%})",
+        f"{icon} {opp.instrument.upper()} — {opp.direction} "
+        f"({getattr(opp, 'verdict', '')} · edge {getattr(opp, 'edge_score', 0):.0f} · "
+        f"POP {getattr(opp, 'pop', 0):.0%})",
         expanded=recommended,
     ):
+        if getattr(opp, "headline", ""):
+            st.markdown(f"**👉 {opp.headline}**")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Premium", f"₹{opp.entry_price}")
         c2.metric("Buy-back target" if opp.trade_mode == "SELL_OPTION" else "Target", f"₹{opp.target_price}")
         c3.metric("Stop Loss", f"₹{opp.stop_loss}")
         c4.metric("Est. Margin", f"₹{opp.estimated_margin:,.0f}")
 
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Prob. of Profit", f"{getattr(opp, 'pop', 0):.0%}")
+        c6.metric("Net if target", f"₹{opp.expected_net_pnl:,.0f}")
+        c7.metric("Risk (SL)", f"₹{getattr(opp, 'max_loss', 0):,.0f}")
+        c8.metric("Expected Value", f"₹{getattr(opp, 'expected_value', 0):,.0f}")
+
         st.markdown(
             f"**Strike:** {opp.strike} | **Lot:** {opp.lot_size} | "
-            f"**Costs:** ₹{opp.estimated_costs:.0f} | **Est. net:** ₹{opp.expected_net_pnl:.0f}"
+            f"**Delta:** {getattr(opp, 'delta', 0):.2f} | "
+            f"**Costs:** ₹{opp.estimated_costs:.0f}"
         )
         st.markdown(f"**{opp.recommendation_note}**")
         st.markdown(f"**Reasoning:** {opp.reasoning}")

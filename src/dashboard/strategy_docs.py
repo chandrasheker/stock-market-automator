@@ -51,6 +51,17 @@ Only instruments **enabled** in Settings are scanned (NIFTY 50, SENSEX, Crude Oi
 ### Step 5 — Cost gate
 Trade only runs if **gross profit at target ≥ 2× all charges** (STT, GST, brokerage, etc.)
 
+### Step 6 — Rank by edge (the "magic")
+Each candidate gets a **0–100 edge score** and a **verdict** (STRONG / GOOD / FAIR / AVOID):
+
+- **Probability of Profit (POP)** — from option delta (sold OTM ≈ 1 − delta)
+- **Expected Value (₹)** — `POP × net_win + (1−POP) × net_loss`, already after all costs
+- **IV percentile** — theta edge for sellers (higher = better)
+- **OI/PCR + news alignment**, risk/reward, and liquidity
+
+Only **positive-EV** ideas are shown on the **Trade Ideas** page, best first. If nothing
+clears the bar, the bot **stays in cash** — that's the core loss-protection rule.
+
 ---
 
 ## How Backtesting Works

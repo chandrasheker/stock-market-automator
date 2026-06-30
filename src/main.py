@@ -224,11 +224,15 @@ def main():
     elif args.command == "download":
         bot.download_history()
     elif args.command == "scan":
-        opps = bot.signal_engine.scan_all(include_buy_suggestions=True)
-        for o in opps:
-            tag = "✅ SELL (recommended)" if o.is_recommended else "⚠️ BUY (not recommended, disabled)"
-            print(f"\n{o.instrument} | {o.direction} | {tag} | Confidence: {o.confidence:.0%}")
-            print(f"  Entry: ₹{o.entry_price} → Target: ₹{o.target_price} | SL: ₹{o.stop_loss}")
+        ideas = bot.signal_engine.get_trade_ideas(include_buy=True)
+        if not ideas:
+            print("\nNo high-edge trade ideas right now. Staying in cash protects capital.")
+        for i, o in enumerate(ideas, 1):
+            tag = "SELL" if o.trade_mode == "SELL_OPTION" else "BUY (info only)"
+            print(f"\n#{i} [{o.verdict} · edge {o.edge_score:.0f}/100] {tag}")
+            print(f"  {o.headline}")
+            print(f"  POP {o.pop:.0%} | EV ₹{o.expected_value:,.0f} | "
+                  f"Net if target ₹{o.expected_net_pnl:,.0f} | Risk ₹{o.max_loss:,.0f}")
             print(f"  {o.reasoning}")
     elif args.command == "daily-backtest":
         from src.backtest.daily_runner import DailyBacktestRunner

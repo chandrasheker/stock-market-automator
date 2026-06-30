@@ -39,6 +39,14 @@ class TradeOpportunity:
     is_recommended: bool = True
     recommendation_note: str = ""
     estimated_margin: float = 0.0
+    delta: float = 0.0
+    pop: float = 0.0                  # probability of profit (0-1)
+    expected_value: float = 0.0      # EV in ₹ after costs
+    max_loss: float = 0.0            # ₹ loss if stop-loss hit (after costs)
+    edge_score: float = 0.0          # composite 0-100
+    verdict: str = "FAIR"            # STRONG / GOOD / FAIR / AVOID
+    headline: str = ""               # one-line actionable suggestion
+    iv_percentile: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)
 
     @property
@@ -185,6 +193,24 @@ class SignalEngine:
         sells = self._scan_sell_opportunities(instrument_key)
         return sells[0] if sells else None
 
+    def get_trade_ideas(
+        self, include_buy: bool = False, min_edge: float = 45.0
+    ) -> list[TradeOpportunity]:
+        """Ranked, profit-positive suggestions for live trading.
+
+        Only returns ideas with positive expected value and an acceptable
+        edge score, sorted best-first — these are the 'sell this CE/PE' calls.
+        """
+        opps = self.scan_all(include_buy_suggestions=include_buy)
+        ideas = [
+            o for o in opps
+            if o.verdict != "AVOID"
+            and o.expected_value > 0
+            and o.edge_score >= min_edge
+        ]
+        ideas.sort(key=lambda x: (x.verdict != "STRONG", x.verdict != "GOOD", -x.edge_score))
+        return ideas
+
     def _build_opportunity(
         self,
         instrument_key: str,
@@ -323,7 +349,7 @@ class SignalEngine:
             )
             reasoning_parts.append(f"Est. margin required: ₹{est_margin:,.0f}")
 
-        return TradeOpportunity(
+        opp = TradeOpportunity(
             instrument=instrument_key,
             direction=dir_label,
             trade_mode=trade_mode,
@@ -341,6 +367,146 @@ class SignalEngine:
             is_recommended=is_recommended,
             recommendation_note=note,
             estimated_margin=est_margin,
+            delta=float(strike_info.get("delta", 0.0)),
+        )
+
+        self._enrich_metrics(opp, exchange, chain_analysis, news_sentiment, vix, liq_ok)
+        return opp
+
+    def _enrich_metrics(
+        self,
+        opp: TradeOpportunity,
+        exchange: str,
+        chain_analysis: dict,
+        news_sentiment: dict,
+        vix: float,
+        liq_ok: bool,
+    ) -> None:
+        """Compute probability of profit, expected value, and an edge score (the 'magic')."""
+        qty = opp.lot_size
+
+        # Net P&L if target hit and if stop-loss hit (after all costs)
+        net_win, _ = self.costs.net_pnl(
+            opp.entry_price, opp.target_price, qty, exchange, opp.trade_mode
+        )
+        net_loss, _ = self.costs.net_pnl(
+            opp.entry_price, opp.stop_loss, qty, exchange, opp.trade_mode
+        )
+        opp.expected_net_pnl = round(net_win, 2)
+        opp.max_loss = round(net_loss, 2)
+
+        # Probability of profit.
+        # For a sold OTM option, P(expire OTM) ~ 1 - |delta|. We also collect
+        # partial profit before expiry, so blend with the option-selling target.
+        delta = abs(opp.delta) if opp.delta else 0.0
+        if opp.trade_mode == "SELL_OPTION":
+            base_pop = (1 - delta) if delta else 0.70
+            # Selling exits at 50% of premium, well before expiry → higher realised hit-rate
+            pop = min(0.92, base_pop + 0.08)
+        else:
+            base_pop = delta if delta else 0.40
+            # Buyers must overcome premium decay → haircut
+            pop = max(0.20, base_pop - 0.10)
+
+        # News alignment nudges POP
+        news_score = news_sentiment.get("score", 0)
+        if opp.trade_mode == "SELL_OPTION":
+            if opp.direction.endswith("CE") and news_score < -0.1:
+                pop = min(0.95, pop + 0.04)
+            elif opp.direction.endswith("PE") and news_score > 0.1:
+                pop = min(0.95, pop + 0.04)
+        opp.pop = round(pop, 3)
+
+        # Expected value (₹): EV = POP*win + (1-POP)*loss  (loss is negative)
+        opp.expected_value = round(pop * net_win + (1 - pop) * net_loss, 2)
+
+        # IV percentile (theta edge for sellers)
+        try:
+            opp.iv_percentile = self.pipeline.iv.get_vix_percentile()
+        except Exception:
+            opp.iv_percentile = 50.0
+
+        opp.edge_score = self._compute_edge_score(opp, chain_analysis, news_score, liq_ok)
+        opp.verdict = self._verdict(opp)
+        opp.headline = self._headline(opp)
+
+    def _compute_edge_score(
+        self, opp: TradeOpportunity, chain_analysis: dict, news_score: float, liq_ok: bool
+    ) -> float:
+        """Blend all signals into a single 0-100 conviction score."""
+        score = 0.0
+
+        # Confidence (max 25)
+        score += min(25, opp.confidence * 25)
+
+        # Probability of profit (max 25)
+        score += min(25, opp.pop * 25)
+
+        # Risk/reward & positive EV (max 20)
+        if opp.max_loss < 0:
+            rr = opp.expected_net_pnl / abs(opp.max_loss)
+            score += min(12, rr * 6)
+        if opp.expected_value > 0:
+            score += 8
+
+        # IV percentile favouring sellers (max 12)
+        if opp.trade_mode == "SELL_OPTION":
+            score += min(12, (opp.iv_percentile / 100) * 12)
+        else:
+            score += min(12, ((100 - opp.iv_percentile) / 100) * 12)
+
+        # OI / PCR alignment (max 8)
+        if chain_analysis.get("valid"):
+            oi_signal = chain_analysis.get("oi_signal", "NEUTRAL")
+            bullish_trade = opp.direction.endswith("PE")  # selling PE / buying CE = bullish
+            if (oi_signal == "BULLISH" and bullish_trade) or (
+                oi_signal == "BEARISH" and not bullish_trade
+            ):
+                score += 8
+            elif oi_signal == "NEUTRAL":
+                score += 4
+
+        # News alignment (max 5)
+        aligned = (
+            (opp.direction.endswith("CE") and news_score < 0)
+            or (opp.direction.endswith("PE") and news_score > 0)
+        )
+        if aligned:
+            score += 5
+
+        # Liquidity penalty
+        if not liq_ok:
+            score -= 15
+
+        return round(max(0, min(100, score)), 1)
+
+    @staticmethod
+    def _verdict(opp: TradeOpportunity) -> str:
+        if opp.expected_value <= 0:
+            return "AVOID"
+        if opp.edge_score >= 75 and opp.pop >= 0.75:
+            return "STRONG"
+        if opp.edge_score >= 60:
+            return "GOOD"
+        if opp.edge_score >= 45:
+            return "FAIR"
+        return "AVOID"
+
+    @staticmethod
+    def _headline(opp: TradeOpportunity) -> str:
+        action = "SELL" if opp.trade_mode == "SELL_OPTION" else "BUY"
+        opt = opp.direction.split("_")[-1]
+        name = opp.instrument.upper().replace("NIFTY50", "NIFTY").replace("CRUDE_OIL", "CRUDE")
+        if opp.trade_mode == "SELL_OPTION":
+            return (
+                f"{action} {name} {int(opp.strike)} {opt} @ ₹{opp.entry_price:.1f} → "
+                f"collect premium, ~{opp.pop:.0%} chance of profit, "
+                f"net ₹{opp.expected_net_pnl:,.0f} if target"
+            )
+        return (
+            f"{action} {name} {int(opp.strike)} {opt} @ ₹{opp.entry_price:.1f} → "
+            f"target ₹{opp.target_price:.1f}, ~{opp.pop:.0%} POP, "
+            f"net ₹{opp.expected_net_pnl:,.0f} if target"
         )
 
     def _score_strategies(self, trend, breakout, chain, news, vix, df) -> dict:
