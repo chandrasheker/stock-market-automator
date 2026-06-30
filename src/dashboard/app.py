@@ -252,7 +252,8 @@ def show_option_chain(config):
     except Exception as e:
         st.info(f"Kite overlay unavailable: {e}")
 
-    chain = service.fetch_chain(instrument)
+    selected_expiry = st.session_state.get(f"exp_{instrument}")
+    chain = service.fetch_chain(instrument, expiry=selected_expiry)
 
     if not chain.get("valid"):
         error = chain.get("error", "unknown")
@@ -276,34 +277,96 @@ def show_option_chain(config):
             )
         return
 
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
-    m1.metric("Spot", f"₹{chain.get('underlying', 0):,.2f}")
-    m2.metric("PCR", f"{chain.get('pcr', 0):.2f}")
-    m3.metric("Max Pain", f"₹{chain.get('max_pain', 0):,.0f}")
-    m4.metric("Expiry", chain.get("expiry", "—"))
-    m5.metric("Updated", chain.get("timestamp", "—"))
-    m6.metric("Source", chain.get("source", "—").upper())
+    _render_chain_header(instrument, chain, inst_labels)
+
+    # Expiry tabs (like Sensibull/Kite)
+    expiries = chain.get("expiries", [])
+    if expiries:
+        current = chain.get("expiry")
+        idx = expiries.index(current) if current in expiries else 0
+        chosen = st.radio(
+            "Expiry", expiries, index=idx, horizontal=True, key=f"exprad_{instrument}",
+            label_visibility="collapsed",
+        )
+        if chosen != current:
+            st.session_state[f"exp_{instrument}"] = chosen
+            chain = service.fetch_chain(instrument, expiry=chosen)
 
     view = chain.get("chain_view", pd.DataFrame())
     if view.empty:
         return
 
-    # Highlight ATM row
     strikes_side = config.get("option_chain", {}).get("strikes_each_side", 10)
-    if chain.get("underlying"):
-        spot = chain["underlying"]
+    spot = chain.get("underlying", 0)
+    if spot:
         view = view.iloc[(view["Strike"] - spot).abs().argsort()[: strikes_side * 2 + 1]]
+    view = view.sort_values("Strike").reset_index(drop=True)
 
-    def highlight_atm(row):
-        return ["background-color: #1a3a5c" if row.get("ATM") else "" for _ in row]
+    _render_option_chain_table(view, spot)
+    st.caption(
+        f"Refresh #{count} · OI in lakhs · ATM row highlighted · "
+        f"ITM shaded · source: {chain.get('source', '—').upper()}"
+    )
 
-    styled = view.style.apply(highlight_atm, axis=1).format({
-        "CE LTP": "{:.2f}", "PE LTP": "{:.2f}",
-        "CE IV": "{:.1f}", "PE IV": "{:.1f}",
+
+def _render_chain_header(instrument, chain, inst_labels):
+    spot = chain.get("underlying", 0)
+    name = inst_labels.get(instrument, instrument).upper()
+    suffix = "FUT" if instrument == "crude_oil" else "SPOT"
+    h1, h2, h3, h4 = st.columns([3, 2, 2, 2])
+    h1.markdown(f"### {name} {suffix}\n**₹{spot:,.2f}**")
+    h2.metric("PCR", f"{chain.get('pcr', 0):.2f}")
+    h3.metric("Max Pain", f"₹{chain.get('max_pain', 0):,.0f}")
+    h4.metric("Updated", chain.get("timestamp", "—"))
+
+
+def _render_option_chain_table(view, spot):
+    """Render the classic Calls | Strike | Puts layout."""
+    disp = pd.DataFrame({
+        "Call OI (L)": (view["CE OI"] / 1e5).round(2),
+        "Call Vol": view["CE Vol"].astype(int),
+        "Call IV": view["CE IV"].round(1),
+        "Call LTP": view["CE LTP"].round(2),
+        "STRIKE": view["Strike"].astype(int),
+        "Put LTP": view["PE LTP"].round(2),
+        "Put IV": view["PE IV"].round(1),
+        "Put Vol": view["PE Vol"].astype(int),
+        "Put OI (L)": (view["PE OI"] / 1e5).round(2),
     })
-    st.dataframe(styled, use_container_width=True, height=500)
+    atm_strike = None
+    if view.get("ATM") is not None and view["ATM"].any():
+        atm_strike = int(view.loc[view["ATM"], "Strike"].iloc[0])
 
-    st.caption(f"Refresh #{count} | ATM row highlighted | CE=Call, PE=Put")
+    def style_row(row):
+        strike = row["STRIKE"]
+        is_atm = atm_strike is not None and strike == atm_strike
+        call_itm = spot and strike < spot
+        put_itm = spot and strike > spot
+        out = []
+        for col in row.index:
+            css = ""
+            if col == "STRIKE":
+                css = "background-color:#2a4d69;color:#fff;font-weight:700;text-align:center"
+            elif is_atm:
+                css = "background-color:#1a3a5c;font-weight:700"
+            elif col.startswith("Call") and call_itm:
+                css = "background-color:rgba(255,193,7,0.10)"
+            elif col.startswith("Put") and put_itm:
+                css = "background-color:rgba(255,193,7,0.10)"
+            out.append(css)
+        return out
+
+    styled = (
+        disp.style.apply(style_row, axis=1)
+        .format({
+            "Call OI (L)": "{:.2f}", "Put OI (L)": "{:.2f}",
+            "Call LTP": "{:.2f}", "Put LTP": "{:.2f}",
+            "Call IV": "{:.1f}", "Put IV": "{:.1f}",
+        })
+        .set_properties(subset=["Call LTP"], **{"color": "#26a69a", "font-weight": "600"})
+        .set_properties(subset=["Put LTP"], **{"color": "#ef5350", "font-weight": "600"})
+    )
+    st.dataframe(styled, use_container_width=True, height=560, hide_index=True)
 
 
 def show_strategy_logic():

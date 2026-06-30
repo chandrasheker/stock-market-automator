@@ -117,13 +117,14 @@ class LiveOptionChainService:
             logger.debug(f"Kite client unavailable: {e}")
         return None
 
-    def fetch_chain(self, instrument_key: str) -> dict:
+    def fetch_chain(self, instrument_key: str, expiry: Optional[str] = None) -> dict:
         meta = self.CHAIN_SOURCES.get(instrument_key)
         if not meta:
             return self._error_result(instrument_key, "unknown_instrument", "Unknown instrument")
 
         if not self.is_market_open(instrument_key):
-            cached = self._cache.get(instrument_key)
+            cache_key = f"{instrument_key}:{expiry or 'nearest'}"
+            cached = self._cache.get(cache_key)
             if cached and cached.get("valid"):
                 cached = {**cached, "stale": True, "error": "market_closed"}
                 return cached
@@ -139,7 +140,7 @@ class LiveOptionChainService:
 
         # Kite REST is reliable from cloud VMs; NSE often returns 403 on Oracle Cloud.
         if kite:
-            raw = self._fetch_via_kite(instrument_key, meta, kite)
+            raw = self._fetch_via_kite(instrument_key, meta, kite, expiry=expiry)
             source = "kite"
 
         if not raw and instrument_key == "nifty50":
@@ -168,6 +169,7 @@ class LiveOptionChainService:
             df = self._overlay_kite_ticks(df)
 
         chain_view = self._build_chain_table(df, analysis)
+        all_expiries = raw.get("_all_expiries") or raw.get("records", {}).get("expiryDates", [])
         result = {
             "valid": not df.empty,
             "instrument": instrument_key,
@@ -175,8 +177,9 @@ class LiveOptionChainService:
             "underlying": analysis.get("underlying", 0),
             "pcr": analysis.get("pcr", 0),
             "max_pain": analysis.get("max_pain", 0),
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "timestamp": ist_now().strftime("%H:%M:%S"),
             "expiry": raw.get("records", {}).get("expiryDates", [""])[0] if raw else "",
+            "expiries": all_expiries,
             "chain_df": df,
             "chain_view": chain_view,
             "analysis": analysis,
@@ -189,7 +192,7 @@ class LiveOptionChainService:
                 "Option chain returned no rows. Try again during market hours.",
             )
 
-        self._cache[instrument_key] = result
+        self._cache[f"{instrument_key}:{expiry or 'nearest'}"] = result
         for cb in self._callbacks:
             try:
                 cb(instrument_key, result)
@@ -250,7 +253,9 @@ class LiveOptionChainService:
                     df.at[idx, "oi"] = tick["oi"]
         return df
 
-    def _fetch_via_kite(self, instrument_key: str, meta: dict, kite) -> dict:
+    def _fetch_via_kite(
+        self, instrument_key: str, meta: dict, kite, expiry: Optional[str] = None
+    ) -> dict:
         """Build NSE-compatible chain structure from Kite instruments + quotes."""
         underlying = meta["underlying"]
         exchange = meta["exchange"]
@@ -277,18 +282,26 @@ class LiveOptionChainService:
                 )
                 return {}
 
-            # Nearest expiry that hasn't passed (in IST)
+            # Expiries that haven't passed (in IST)
             from src.utils.clock import ist_today
             today = ist_today()
-            future_expiries = sorted(
+            all_exp = sorted(
                 e for e in set(i["expiry"] for i in opts)
                 if not hasattr(e, "year") or e >= today
-            )
-            expiries = future_expiries or sorted(set(i["expiry"] for i in opts))
-            nearest = expiries[0]
-            opts = [i for i in opts if i["expiry"] == nearest]
+            ) or sorted(set(i["expiry"] for i in opts))
+
+            def _fmt(e):
+                return e.strftime("%d-%b-%Y") if hasattr(e, "strftime") else str(e)
+
+            exp_strs = [_fmt(e) for e in all_exp]
+            # Pick requested expiry if valid, else nearest
+            if expiry and expiry in exp_strs:
+                chosen = all_exp[exp_strs.index(expiry)]
+            else:
+                chosen = all_exp[0]
+            opts = [i for i in opts if i["expiry"] == chosen]
             logger.debug(
-                f"{instrument_key}: {len(opts)} options on {exchange}, nearest expiry {nearest}"
+                f"{instrument_key}: {len(opts)} options on {exchange}, expiry {chosen}"
             )
 
             spot = self._fetch_spot(kite, instrument_key, meta, exchange, instruments, underlying)
@@ -330,13 +343,13 @@ class LiveOptionChainService:
                         }
                 records_data.append(row)
 
-            expiry_str = nearest.strftime("%d-%b-%Y") if hasattr(nearest, "strftime") else str(nearest)
             return {
                 "records": {
                     "underlyingValue": spot,
-                    "expiryDates": [expiry_str],
+                    "expiryDates": [_fmt(chosen)],
                     "data": records_data,
-                }
+                },
+                "_all_expiries": exp_strs,
             }
         except Exception as e:
             logger.warning(f"Kite chain fetch failed for {instrument_key}: {e}")
