@@ -215,34 +215,53 @@ def show_option_chain(config):
 
     service: LiveOptionChainService = st.session_state.chain_service
 
-    # Try Kite for faster ticks when logged in
+    # Try Kite for live chain (required on cloud VMs — NSE blocks Oracle Cloud IPs)
     try:
         auth = KiteAuth()
         if auth.is_authenticated():
+            service.set_kite_client(auth.get_client())
             from src.data.live_feed import LiveFeedManager
             if "kite_feed" not in st.session_state:
                 feed = LiveFeedManager(auth.get_client())
                 feed.start()
                 st.session_state.kite_feed = feed
             service.set_kite_feed(st.session_state.kite_feed)
-            st.success("Kite WebSocket connected — tick-level LTP overlay active", icon="⚡")
-    except Exception:
-        st.info("NSE polling mode (login to Kite for WebSocket overlay)")
+            st.success("Kite connected — live option chain via Zerodha API", icon="⚡")
+        else:
+            st.warning(
+                "**Login to Zerodha Kite** (Settings page) to load the option chain. "
+                "NSE's public API is blocked from cloud servers like Oracle Cloud."
+            )
+    except Exception as e:
+        st.info(f"Kite overlay unavailable: {e}")
 
     chain = service.fetch_chain(instrument)
 
     if not chain.get("valid"):
-        st.warning("Could not load option chain. Market may be closed or API unavailable.")
-        if instrument == "crude_oil":
-            st.caption("Crude Oil chain requires Zerodha Kite login (MCX).")
+        error = chain.get("error", "unknown")
+        detail = chain.get("error_detail", "Could not load option chain.")
+        if error == "market_closed":
+            st.warning(detail)
+            if chain.get("stale"):
+                st.caption("Showing last cached chain from earlier today.")
+        elif error == "kite_login_required":
+            st.error(detail)
+            st.markdown("Go to **Settings → Zerodha Kite Connect** and authenticate.")
+        else:
+            st.warning(detail)
+        if instrument == "sensex":
+            st.caption("SENSEX options trade on BSE (BFO) — Kite login is required.")
+        elif instrument == "crude_oil":
+            st.caption("Crude Oil options are on MCX — Kite login is required.")
         return
 
-    m1, m2, m3, m4, m5 = st.columns(5)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Spot", f"₹{chain.get('underlying', 0):,.2f}")
     m2.metric("PCR", f"{chain.get('pcr', 0):.2f}")
     m3.metric("Max Pain", f"₹{chain.get('max_pain', 0):,.0f}")
     m4.metric("Expiry", chain.get("expiry", "—"))
     m5.metric("Updated", chain.get("timestamp", "—"))
+    m6.metric("Source", chain.get("source", "—").upper())
 
     view = chain.get("chain_view", pd.DataFrame())
     if view.empty:

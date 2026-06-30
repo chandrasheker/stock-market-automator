@@ -137,7 +137,7 @@ class HistoricalDataFetcher:
             return pd.DataFrame()
 
     def fetch_option_chain_snapshot(self, underlying: str = "NIFTY") -> dict:
-        """Fetch live option chain from NSE."""
+        """Fetch live option chain from NSE (often blocked on cloud VMs — prefer Kite)."""
         self._nse_session_init()
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={underlying}"
 
@@ -145,6 +145,10 @@ class HistoricalDataFetcher:
             resp = self.session.get(url, timeout=15)
             if resp.status_code == 200:
                 return resp.json()
+            logger.warning(
+                f"NSE option chain HTTP {resp.status_code} for {underlying} "
+                "(common on cloud VMs — use Zerodha Kite login)"
+            )
         except Exception as e:
             logger.warning(f"Option chain fetch failed: {e}")
         return {}
