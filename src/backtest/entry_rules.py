@@ -111,6 +111,21 @@ class EntryRuleEngine:
         if adx > max_adx or not vix_ok:
             return None
 
+        # IV percentile gate — avoid selling in low-vol regimes
+        if sell_cfg.get("min_iv_percentile"):
+            from src.filters.iv_analysis import IVAnalyzer
+            iv_ok, _ = IVAnalyzer().allows_selling(vix)
+            if not iv_ok:
+                return None
+
+        # Event / expiry gate
+        if sell_cfg.get("block_near_events", True):
+            from src.filters.events import EventFilter
+            headlines = news_sentiment.get("headlines", [])
+            ev_ok, _ = EventFilter().allows_selling(instrument, headlines)
+            if not ev_ok:
+                return None
+
         # Avoid selling into strong breakouts
         if breakout.get("breakout") and breakout.get("strength", 0) > 0.004:
             return None

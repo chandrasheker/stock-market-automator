@@ -678,6 +678,14 @@ def show_settings(env, config):
                     st.rerun()
 
     st.divider()
+    risk = RiskManager()
+    summary = risk.get_risk_summary()
+    st.subheader("Risk Status")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Open Positions", f"{summary['open_positions']}/{summary['max_positions']}")
+    c2.metric("Daily P&L", f"₹{summary['daily_pnl']:,.0f}")
+    c3.metric("Consecutive Losses", f"{summary['consecutive_losses']}/{summary['max_consecutive_losses']}")
+
     st.subheader("Risk Parameters")
     st.markdown(f"- Capital: ₹{env.capital:,.0f}")
     st.markdown(f"- Max risk per trade: {env.max_risk_per_trade_pct}%")
@@ -685,9 +693,12 @@ def show_settings(env, config):
     st.markdown(f"- Profit target: {env.profit_target_pct}%")
     st.markdown(f"- Stop loss: {env.stop_loss_pct}%")
     st.markdown(f"- Max open positions: {env.max_open_positions}")
+    st.markdown(f"- Trailing stop: {config.get('exit_rules', {}).get('trailing_stop_pct', 10)}% after "
+                f"{config.get('exit_rules', {}).get('trailing_activate_after_pct', 15)}% profit")
+    st.markdown(f"- No new entries: before {config.get('time_filters', {}).get('no_entry_before', '09:30')} / "
+                f"after {config.get('time_filters', {}).get('no_entry_after', '15:15')} IST")
 
     st.divider()
-    risk = RiskManager()
     if risk.is_killed:
         if st.button("Deactivate Kill Switch"):
             risk.deactivate_kill_switch()

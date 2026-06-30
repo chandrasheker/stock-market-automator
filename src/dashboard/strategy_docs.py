@@ -1,6 +1,26 @@
 """Dashboard helpers for strategy explanation and option chain."""
 
 STRATEGY_LOGIC_MD = """
+## Trade Pipeline (13 Steps)
+
+Every live trade follows this order:
+
+1. **Fetch live data** — spot, option chain, VIX, news
+2. **Trading hours** — skip if market closed
+3. **Time filter** — no entries 9:15–9:30 or after 3:15 PM IST
+4. **Liquidity** — LTP ≥ ₹15, OI ≥ 10k (NIFTY), spread ≤ 1%
+5. **Trend / range** — ADX, EMAs, Bollinger bands
+6. **Volatility** — VIX level + IV percentile ≥ 50% for sells
+7. **News / events** — block sells near RBI, Fed, budget, expiry headlines
+8. **Strategy** — sell OTM premium in range; buy only in strong trends
+9. **Strike** — delta-based (sell 0.15–0.25δ, buy 0.30–0.50δ)
+10. **Position size** — max 2% risk per trade
+11. **Costs** — gross profit must be ≥ 2× STT/GST/brokerage
+12. **Manage** — monitor every 30s
+13. **Exit** — target, stop-loss, trailing stop, EOD force close at 3:20 PM
+
+---
+
 ## How the Bot Chooses CE vs PE, Buy vs Sell
 
 ### Step 1 — Pick the instrument
@@ -22,15 +42,11 @@ Only instruments **enabled** in Settings are scanned (NIFTY 50, SENSEX, Crude Oi
 | **Bullish** (uptrend, breakout up, positive news) | **BUY CE** | **SELL PE** (bullish put sell) |
 | **Bearish** (downtrend, breakout down, negative news) | **BUY PE** | **SELL CE** (bearish call sell) |
 
-### Step 4 — Pick the strike
-1. Find **ATM strike** = round(spot / strike_interval) × interval  
-   - NIFTY: ₹50 steps | SENSEX: ₹100 | Crude: ₹50
-2. **BUY** → 1 strike **OTM** (cheaper, higher % return on 20% target)  
-   - Bullish → ATM + 1 interval **CE**  
-   - Bearish → ATM − 1 interval **PE**
-3. **SELL** → 2 strikes **OTM** (safer, more room before ITM)  
-   - Sell CE above spot | Sell PE below spot
-4. Pick the row from **live option chain** with valid LTP > 0
+### Step 4 — Pick the strike (delta-based)
+1. **SELL** → target delta **0.15–0.25** (OTM, safer premium collection)
+2. **BUY** → target delta **0.30–0.50** (directional with reasonable premium)
+3. Fallback: fixed OTM distance if IV/delta unavailable
+4. **Liquidity gate** — reject if spread > 1%, OI too low, or LTP < ₹15
 
 ### Step 5 — Cost gate
 Trade only runs if **gross profit at target ≥ 2× all charges** (STT, GST, brokerage, etc.)

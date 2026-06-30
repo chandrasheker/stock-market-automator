@@ -17,6 +17,7 @@ from src.toggles import is_action_enabled, is_any_buy_enabled, is_instrument_ena
 from src.costs.calculator import CostCalculator
 from src.data.historical import HistoricalDataFetcher
 from src.data.news_fetcher import NewsFetcher
+from src.filters.pipeline import TradePipeline
 
 
 @dataclass
@@ -77,6 +78,7 @@ class SignalEngine:
         self.costs = CostCalculator()
         self.data_fetcher = HistoricalDataFetcher()
         self.news = NewsFetcher()
+        self.pipeline = TradePipeline()
         self.profit_target = self.env.profit_target_pct / 100
         self.stop_loss = self.env.stop_loss_pct / 100
         sell_cfg = self.config.get("option_selling", {})
@@ -113,8 +115,19 @@ class SignalEngine:
 
     def _scan_sell_opportunities(self, instrument_key: str) -> list[TradeOpportunity]:
         """Scan SELL CE / SELL PE — only recommended trades."""
+        vix = self.data_fetcher.fetch_india_vix()
+        news_sentiment = self.news.get_instrument_sentiment(
+            self.INSTRUMENT_NEWS_MAP.get(instrument_key, instrument_key)
+        )
+
+        ok, reason = self.pipeline.run_pre_strategy_checks(
+            instrument_key, "SELL_OPTION", vix, news_sentiment.get("headlines")
+        )
+        if not ok:
+            logger.debug(f"Pipeline blocked {instrument_key}: {reason}")
+            return []
+
         cfg = self.config["instruments"][instrument_key]
-        news_key = self.INSTRUMENT_NEWS_MAP.get(instrument_key, instrument_key)
 
         hist = self.data_fetcher.fetch_index_history(instrument_key)
         if hist.empty or len(hist) < 30:
@@ -124,8 +137,6 @@ class SignalEngine:
         trend = self.technical.get_trend_signal(df)
         breakout = self.technical.detect_breakout(df)
         latest = df.iloc[-1]
-        vix = self.data_fetcher.fetch_india_vix()
-        news_sentiment = self.news.get_instrument_sentiment(news_key)
 
         setup = self.entry_rules._evaluate_sell(
             instrument_key, trend, breakout, latest, df,
@@ -188,6 +199,17 @@ class SignalEngine:
         news_key = self.INSTRUMENT_NEWS_MAP.get(instrument_key, instrument_key)
         exchange = cfg.get("exchange", "NFO")
 
+        vix = self.data_fetcher.fetch_india_vix()
+        news_sentiment = self.news.get_instrument_sentiment(news_key)
+
+        if is_recommended:
+            ok, reason = self.pipeline.run_pre_strategy_checks(
+                instrument_key, trade_mode, vix, news_sentiment.get("headlines")
+            )
+            if not ok:
+                logger.debug(f"Pipeline blocked build: {reason}")
+                return None
+
         hist = self.data_fetcher.fetch_index_history(instrument_key)
         if hist.empty or len(hist) < 30:
             return None
@@ -220,8 +242,6 @@ class SignalEngine:
 
         chain_data = self.data_fetcher.fetch_option_chain_snapshot(cfg["underlying"])
         chain_analysis = self.options.analyze_chain(chain_data) if chain_data else {"valid": False}
-        news_sentiment = self.news.get_instrument_sentiment(news_key)
-        vix = self.data_fetcher.fetch_india_vix()
 
         scores = self._score_strategies(
             trend, breakout, chain_analysis, news_sentiment, vix, df
@@ -243,8 +263,17 @@ class SignalEngine:
         underlying = chain_analysis.get("underlying", float(df["close"].iloc[-1]))
         chain_df = self.options.parse_option_chain(chain_data) if chain_data else pd.DataFrame()
         otm = 2 if trade_mode == "SELL_OPTION" else 1
-        strike_info = self.options.select_strike(chain_df, direction, underlying, otm_distance=otm)
+        strike_info = self.options.select_strike(
+            chain_df, direction, underlying,
+            otm_distance=otm,
+            trade_mode=trade_mode,
+        )
         if not strike_info:
+            return None
+
+        liq_ok, liq_reason = self.pipeline.check_strike_liquidity(strike_info, instrument_key)
+        if is_recommended and not liq_ok:
+            logger.info(f"Liquidity filter rejected {instrument_key}: {liq_reason}")
             return None
 
         entry = strike_info["premium"]
@@ -278,8 +307,13 @@ class SignalEngine:
         reasoning_parts = [
             note,
             f"Mode: {trade_mode}",
+            f"Session: {self.pipeline.time.get_session_phase()}",
             f"Trend: {trend['direction']} (strength {trend['strength']:.2f})",
         ]
+        if strike_info.get("delta"):
+            reasoning_parts.append(f"Delta: {strike_info['delta']:.2f}")
+        if is_recommended and not liq_ok:
+            reasoning_parts.append(f"Liquidity: {liq_reason}")
         if chain_analysis.get("valid"):
             reasoning_parts.append(f"PCR: {chain_analysis['pcr']} ({chain_analysis['oi_signal']})")
         reasoning_parts.append(f"News: {news_sentiment['score']:.2f}")

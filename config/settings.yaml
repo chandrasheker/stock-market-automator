@@ -153,9 +153,77 @@ option_selling:
   stop_loss_pct: 80.0        # exit if premium doubles against you
   max_adx: 22                # only sell when trend is weak
   min_vix: 14                # sell when IV elevated (theta in your favor)
+  min_iv_percentile: 50      # VIX percentile vs 1-year history (avoid low-IV sells)
   min_atr_pct: 0.012
   max_bullish_news: 0.25     # don't sell calls if news very bullish
   min_bearish_news: -0.25    # don't sell puts if news very bearish
+  block_near_events: true    # skip sells near RBI/Fed/budget/expiry headlines
+
+# Liquidity filter — skip illiquid strikes (poor fills)
+liquidity:
+  enabled: true
+  min_ltp: 15.0
+  max_spread_pct: 1.0
+  max_spread_rupees: 2.0
+  min_volume: 500
+  default_min_oi: 10000
+  instruments:
+    nifty50:
+      min_oi: 10000
+    sensex:
+      min_oi: 5000
+    crude_oil:
+      min_oi: 1000
+
+# Time-of-day filters
+time_filters:
+  enabled: true
+  no_entry_before: "09:30"   # avoid opening volatility
+  no_entry_after: "15:15"    # no new intraday entries
+  force_exit_before: "15:20" # close all MIS before close
+  avoid_opening_volatility: true
+
+# Delta-based strike selection
+strike_selection:
+  use_delta: true
+  buy_delta_min: 0.30
+  buy_delta_max: 0.50
+  sell_delta_min: 0.15
+  sell_delta_max: 0.25
+  fallback_otm_distance: true
+
+# Exit rules (profit target, SL, trailing, time)
+exit_rules:
+  trailing_stop_pct: 10.0
+  trailing_activate_after_pct: 15.0
+  force_close_before: "15:20"
+  max_holding_minutes: 240
+
+# Risk limits (beyond .env defaults)
+risk:
+  max_consecutive_losses: 3
+
+# Major event blocking for premium selling
+events:
+  enabled: true
+  block_expiry_day_sells: true
+  keywords:
+    - rbi policy
+    - repo rate
+    - mpc meeting
+    - union budget
+    - fed meeting
+    - fomc
+    - cpi data
+    - inflation data
+    - gdp data
+    - expiry
+    - election result
+  blocked_dates: []
+
+# IV percentile analysis (India VIX)
+iv_analysis:
+  lookback_days: 252
 
 # Indian F&O transaction costs (Zerodha approximations)
 costs:

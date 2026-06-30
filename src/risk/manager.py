@@ -12,6 +12,7 @@ from src.toggles import is_any_buy_enabled
 from src.config import get_env, get_yaml_config
 from src.costs.calculator import CostCalculator
 from src.data.database import DailyPnL, Trade, get_session, init_db
+from src.filters.time_window import TimeWindowFilter
 
 
 class RiskManager:
@@ -21,8 +22,12 @@ class RiskManager:
         self.env = get_env()
         self.config = get_yaml_config()
         self.costs = CostCalculator()
+        self.time_filter = TimeWindowFilter()
+        self.exit_cfg = self.config.get("exit_rules", {})
+        self.risk_cfg = self.config.get("risk", {})
         init_db()
         self._kill_switch = False
+        self._peak_profit_pct: dict[int, float] = {}
 
     def activate_kill_switch(self, reason: str = "Manual"):
         self._kill_switch = True
@@ -88,11 +93,20 @@ class RiskManager:
         if daily_loss < -max_loss:
             return False, f"Daily loss limit hit: ₹{daily_loss:,.0f}"
 
+        max_consec = self.risk_cfg.get("max_consecutive_losses", 3)
+        consec = self._count_consecutive_losses()
+        if consec >= max_consec:
+            return False, f"Consecutive loss limit ({consec}/{max_consec}) — pausing new entries"
+
         return True, "Approved"
 
     def calculate_position_size(self, opportunity: TradeOpportunity) -> int:
         max_risk_amount = self.env.capital * (self.env.max_risk_per_trade_pct / 100)
-        risk_per_lot = (opportunity.entry_price - opportunity.stop_loss) * opportunity.lot_size
+
+        if opportunity.trade_mode == "SELL_OPTION":
+            risk_per_lot = (opportunity.stop_loss - opportunity.entry_price) * opportunity.lot_size
+        else:
+            risk_per_lot = (opportunity.entry_price - opportunity.stop_loss) * opportunity.lot_size
 
         if risk_per_lot <= 0:
             return opportunity.lot_size
@@ -104,10 +118,13 @@ class RiskManager:
         if trade.status != "OPEN":
             return None
 
+        # Force close all intraday MIS before market close
+        if self.time_filter.requires_force_exit(trade.instrument):
+            return "EOD_EXIT"
+
         is_sell = trade.direction and trade.direction.startswith("SELL")
 
         if is_sell:
-            # Sold premium — profit when price falls, loss when it rises
             if current_price <= trade.target_price:
                 return "TARGET_HIT"
             if current_price >= trade.stop_loss:
@@ -125,9 +142,31 @@ class RiskManager:
             if pnl_pct >= self.env.profit_target_pct:
                 return "PROFIT_TARGET"
 
+        # Trailing stop after profit threshold
+        trail_activate = float(self.exit_cfg.get("trailing_activate_after_pct", 15.0))
+        trail_pct = float(self.exit_cfg.get("trailing_stop_pct", self.config.get("trading", {}).get("trailing_stop_pct", 10.0)))
+        trade_id = trade.id or id(trade)
+
+        if is_sell:
+            pnl_pct = ((trade.entry_price - current_price) / trade.entry_price) * 100
+        else:
+            pnl_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
+
+        peak = self._peak_profit_pct.get(trade_id, 0.0)
+        if pnl_pct > peak:
+            self._peak_profit_pct[trade_id] = pnl_pct
+            peak = pnl_pct
+
+        if peak >= trail_activate and pnl_pct <= peak - trail_pct:
+            return "TRAILING_STOP"
+
+        max_hold = self.exit_cfg.get(
+            "max_holding_minutes",
+            self.config.get("trading", {}).get("max_holding_minutes", 240),
+        )
         if trade.entry_time:
             holding_minutes = (datetime.utcnow() - trade.entry_time).total_seconds() / 60
-            if holding_minutes > 240:
+            if holding_minutes > max_hold:
                 return "TIME_EXIT"
 
         return None
@@ -151,10 +190,32 @@ class RiskManager:
 
             db.merge(trade)
             self._update_daily_pnl(trade.pnl, trade.pnl > 0)
+            if trade.id:
+                self._peak_profit_pct.pop(trade.id, None)
             db.commit()
         except Exception as e:
             db.rollback()
             logger.error(f"Failed to record trade close: {e}")
+        finally:
+            db.close()
+
+    def _count_consecutive_losses(self) -> int:
+        db = get_session()
+        try:
+            closed = (
+                db.query(Trade)
+                .filter_by(status="CLOSED")
+                .order_by(Trade.exit_time.desc())
+                .limit(20)
+                .all()
+            )
+            count = 0
+            for t in closed:
+                if t.pnl is not None and t.pnl < 0:
+                    count += 1
+                else:
+                    break
+            return count
         finally:
             db.close()
 
@@ -209,6 +270,8 @@ class RiskManager:
             "max_positions": self.env.max_open_positions,
             "daily_pnl": self._get_daily_pnl(),
             "daily_loss_limit": self.env.capital * (self.env.max_daily_loss_pct / 100),
+            "consecutive_losses": self._count_consecutive_losses(),
+            "max_consecutive_losses": self.risk_cfg.get("max_consecutive_losses", 3),
             "capital": self.env.capital,
             "profit_target_pct": self.env.profit_target_pct,
             "stop_loss_pct": self.env.stop_loss_pct,

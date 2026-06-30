@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
+from src.config import get_yaml_config
+
 
 class OptionsAnalyzer:
     """Analyzes option chains for trading opportunities."""
@@ -84,8 +86,93 @@ class OptionsAnalyzer:
         direction: str,
         underlying_price: float,
         otm_distance: int = 1,
+        trade_mode: str = "BUY_OPTION",
+        days_to_expiry: float = 7 / 365,
     ) -> Optional[dict]:
-        """Select optimal strike for directional trade."""
+        """Select strike — prefers delta-based selection when IV available."""
+        if df.empty:
+            return None
+
+        cfg = get_yaml_config().get("strike_selection", {})
+        if cfg.get("use_delta", True):
+            delta_strike = self.select_strike_by_delta(
+                df, direction, underlying_price, trade_mode, days_to_expiry
+            )
+            if delta_strike:
+                return delta_strike
+
+        if not cfg.get("fallback_otm_distance", True):
+            return None
+
+        return self._select_strike_otm(df, direction, underlying_price, otm_distance)
+
+    def select_strike_by_delta(
+        self,
+        df: pd.DataFrame,
+        direction: str,
+        underlying_price: float,
+        trade_mode: str = "BUY_OPTION",
+        days_to_expiry: float = 7 / 365,
+    ) -> Optional[dict]:
+        """Pick strike closest to target delta band."""
+        cfg = get_yaml_config().get("strike_selection", {})
+        opt_type = "CE" if direction == "BULLISH" else "PE"
+
+        if trade_mode == "SELL_OPTION":
+            d_min = cfg.get("sell_delta_min", 0.15)
+            d_max = cfg.get("sell_delta_max", 0.25)
+        else:
+            d_min = cfg.get("buy_delta_min", 0.30)
+            d_max = cfg.get("buy_delta_max", 0.50)
+
+        target_delta = (d_min + d_max) / 2
+        options = df[df["type"] == opt_type].copy()
+        if options.empty:
+            return None
+
+        candidates = []
+        for _, row in options.iterrows():
+            sigma = float(row.get("iv", 0) or 0) / 100
+            if sigma <= 0:
+                sigma = 0.18
+            delta = abs(
+                self.calculate_delta(
+                    underlying_price, float(row["strike"]), days_to_expiry, sigma, opt_type
+                )
+            )
+            if d_min <= delta <= d_max or abs(delta - target_delta) < 0.15:
+                candidates.append((abs(delta - target_delta), row, delta))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda x: x[0])
+        _, row, delta = candidates[0]
+        premium = float(row["ltp"])
+        if premium <= 0:
+            return None
+
+        return {
+            "strike": float(row["strike"]),
+            "type": opt_type,
+            "premium": premium,
+            "oi": int(row["oi"]),
+            "iv": float(row.get("iv", 0)),
+            "volume": int(row.get("volume", 0)),
+            "expiry": row.get("expiry"),
+            "bid": float(row.get("bid", 0)),
+            "ask": float(row.get("ask", 0)),
+            "delta": round(delta, 3),
+        }
+
+    def _select_strike_otm(
+        self,
+        df: pd.DataFrame,
+        direction: str,
+        underlying_price: float,
+        otm_distance: int,
+    ) -> Optional[dict]:
+        """Legacy fixed OTM distance strike selection."""
         if df.empty:
             return None
 
@@ -119,10 +206,21 @@ class OptionsAnalyzer:
             "premium": float(premium),
             "oi": int(row["oi"]),
             "iv": float(row.get("iv", 0)),
+            "volume": int(row.get("volume", 0)),
             "expiry": row.get("expiry"),
             "bid": float(row.get("bid", 0)),
             "ask": float(row.get("ask", 0)),
         }
+
+    def calculate_delta(
+        self, S: float, K: float, T: float, sigma: float, option_type: str = "CE"
+    ) -> float:
+        if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+            return 0.0
+        d1 = (np.log(S / K) + (self.r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+        if option_type == "CE":
+            return float(norm.cdf(d1))
+        return float(norm.cdf(d1) - 1)
 
     def analyze_chain(self, chain_data: dict) -> dict:
         df = self.parse_option_chain(chain_data)
