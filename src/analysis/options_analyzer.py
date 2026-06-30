@@ -263,6 +263,63 @@ class OptionsAnalyzer:
             return S * norm.cdf(d1) - K * np.exp(-self.r * T) * norm.cdf(d2)
         return K * np.exp(-self.r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
 
+    def implied_vol(
+        self, price: float, S: float, K: float, T: float, option_type: str = "CE"
+    ) -> float:
+        """Solve for implied volatility from market price via bisection."""
+        if price <= 0 or S <= 0 or K <= 0 or T <= 0:
+            return 0.0
+        intrinsic = max(0.0, S - K) if option_type == "CE" else max(0.0, K - S)
+        if price < intrinsic:
+            return 0.0
+
+        lo, hi = 0.01, 3.0
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            theo = self.black_scholes_price(S, K, T, mid, option_type)
+            if abs(theo - price) < 0.01:
+                return mid
+            if theo > price:
+                hi = mid
+            else:
+                lo = mid
+        return round((lo + hi) / 2, 4)
+
+    def calculate_greeks(
+        self, S: float, K: float, T: float, sigma: float, option_type: str = "CE"
+    ) -> dict:
+        """Return delta, gamma, theta (per day), vega (per 1% vol)."""
+        if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+            return {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+
+        sqrt_t = np.sqrt(T)
+        d1 = (np.log(S / K) + (self.r + 0.5 * sigma**2) * T) / (sigma * sqrt_t)
+        d2 = d1 - sigma * sqrt_t
+        pdf = norm.pdf(d1)
+
+        if option_type == "CE":
+            delta = norm.cdf(d1)
+            theta = (
+                -(S * pdf * sigma) / (2 * sqrt_t)
+                - self.r * K * np.exp(-self.r * T) * norm.cdf(d2)
+            )
+        else:
+            delta = norm.cdf(d1) - 1
+            theta = (
+                -(S * pdf * sigma) / (2 * sqrt_t)
+                + self.r * K * np.exp(-self.r * T) * norm.cdf(-d2)
+            )
+
+        gamma = pdf / (S * sigma * sqrt_t)
+        vega = S * pdf * sqrt_t / 100.0  # per 1% change in vol
+
+        return {
+            "delta": round(float(delta), 4),
+            "gamma": round(float(gamma), 6),
+            "theta": round(float(theta) / 365.0, 2),  # per day
+            "vega": round(float(vega), 2),
+        }
+
     def calculate_iv_rank(self, current_iv: float, iv_history: list[float]) -> float:
         if not iv_history:
             return 50.0

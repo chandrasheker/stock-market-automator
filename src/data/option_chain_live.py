@@ -42,6 +42,16 @@ class LiveOptionChainService:
         self._running = False
         self._callbacks: list[Callable] = []
         self._instruments_cache: dict[str, tuple] = {}  # exchange -> (date, instruments)
+        self._oi_baseline: dict = {}  # date -> {tradingsymbol: first-seen OI today}
+
+    def _oi_change(self, symbol: str, current_oi: int) -> int:
+        """Intraday OI change vs the first reading seen today (Kite has no prev-day OI)."""
+        from src.utils.clock import ist_today
+
+        day_map = self._oi_baseline.setdefault(ist_today(), {})
+        if symbol not in day_map:
+            day_map[symbol] = current_oi
+        return int(current_oi - day_map[symbol])
 
     def _get_instruments(self, kite, exchange: str) -> list:
         """Cache the (large) instruments dump per exchange per day."""
@@ -168,6 +178,7 @@ class LiveOptionChainService:
         if self._kite_feed and self._kite_feed.latest_ticks:
             df = self._overlay_kite_ticks(df)
 
+        df = self._enrich_greeks(df)
         chain_view = self._build_chain_table(df, analysis)
         all_expiries = raw.get("_all_expiries") or raw.get("records", {}).get("expiryDates", [])
         result = {
@@ -236,6 +247,7 @@ class LiveOptionChainService:
 
         df = self.analyzer.parse_option_chain(raw)
         analysis = self.analyzer.analyze_chain(raw)
+        df = self._enrich_greeks(df)  # fill IV so delta-based strike selection is accurate
         return df, analysis
 
     def _overlay_kite_ticks(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -332,10 +344,11 @@ class LiveOptionChainService:
                     if opt:
                         key = f"{exchange}:{opt['tradingsymbol']}"
                         q = quotes.get(key, {})
+                        cur_oi = q.get("oi", 0) or 0
                         row[label] = {
                             "lastPrice": q.get("last_price", 0) or 0,
-                            "openInterest": q.get("oi", 0) or 0,
-                            "changeinOpenInterest": 0,
+                            "openInterest": cur_oi,
+                            "changeinOpenInterest": self._oi_change(opt["tradingsymbol"], cur_oi),
                             "totalTradedVolume": q.get("volume", 0) or 0,
                             "impliedVolatility": 0,
                             "bidprice": q.get("depth", {}).get("buy", [{}])[0].get("price", 0) or 0,
@@ -396,12 +409,63 @@ class LiveOptionChainService:
                     pass
         return quotes
 
+    @staticmethod
+    def _dte_years(raw_exp) -> float:
+        from datetime import datetime as _dt
+        from src.utils.clock import ist_today
+
+        if not raw_exp:
+            return 7 / 365
+        if hasattr(raw_exp, "year"):
+            return max(1, (raw_exp - ist_today()).days) / 365
+        for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                exp = _dt.strptime(str(raw_exp), fmt).date()
+                return max(1, (exp - ist_today()).days) / 365
+            except (ValueError, TypeError):
+                continue
+        return 7 / 365
+
+    def _enrich_greeks(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Fill IV (from price if missing) and compute Greeks per option."""
+        if df.empty:
+            return df
+        df = df.copy()
+        S = float(df["underlying"].iloc[0]) if "underlying" in df.columns else 0.0
+        T = self._dte_years(df["expiry"].iloc[0] if "expiry" in df.columns else None)
+
+        ivs, deltas, gammas, thetas, vegas = [], [], [], [], []
+        for _, row in df.iterrows():
+            otype = row["type"]
+            K = float(row["strike"])
+            ltp = float(row.get("ltp", 0) or 0)
+            iv = float(row.get("iv", 0) or 0)
+            if S <= 0 or T <= 0:
+                ivs.append(iv); deltas.append(0); gammas.append(0); thetas.append(0); vegas.append(0)
+                continue
+            sigma = iv / 100 if iv > 0 else self.analyzer.implied_vol(ltp, S, K, T, otype)
+            g = self.analyzer.calculate_greeks(S, K, T, sigma, otype)
+            ivs.append(round(sigma * 100, 1))
+            deltas.append(g["delta"]); gammas.append(g["gamma"])
+            thetas.append(g["theta"]); vegas.append(g["vega"])
+
+        df["iv"] = ivs
+        df["delta"] = deltas
+        df["gamma"] = gammas
+        df["theta"] = thetas
+        df["vega"] = vegas
+        return df
+
     def _build_chain_table(self, df: pd.DataFrame, analysis: dict) -> pd.DataFrame:
         if df.empty:
             return pd.DataFrame()
 
         underlying = analysis.get("underlying", df["underlying"].iloc[0] if "underlying" in df.columns else 0)
         strikes = sorted(df["strike"].unique())
+        has_greeks = "delta" in df.columns
+
+        def g(row, col):
+            return row[col] if (row is not None and col in row) else 0
 
         rows = []
         for strike in strikes:
@@ -410,18 +474,28 @@ class LiveOptionChainService:
             ce_row = ce.iloc[0] if len(ce) > 0 else None
             pe_row = pe.iloc[0] if len(pe) > 0 else None
 
-            rows.append({
+            entry = {
                 "Strike": strike,
-                "CE LTP": ce_row["ltp"] if ce_row is not None else 0,
-                "CE OI": int(ce_row["oi"]) if ce_row is not None else 0,
-                "CE IV": ce_row["iv"] if ce_row is not None else 0,
-                "CE Vol": int(ce_row["volume"]) if ce_row is not None else 0,
-                "PE LTP": pe_row["ltp"] if pe_row is not None else 0,
-                "PE OI": int(pe_row["oi"]) if pe_row is not None else 0,
-                "PE IV": pe_row["iv"] if pe_row is not None else 0,
-                "PE Vol": int(pe_row["volume"]) if pe_row is not None else 0,
+                "CE LTP": g(ce_row, "ltp"),
+                "CE OI": int(g(ce_row, "oi")),
+                "CE OIChg": int(g(ce_row, "oi_change")),
+                "CE IV": g(ce_row, "iv"),
+                "CE Vol": int(g(ce_row, "volume")),
+                "PE LTP": g(pe_row, "ltp"),
+                "PE OI": int(g(pe_row, "oi")),
+                "PE OIChg": int(g(pe_row, "oi_change")),
+                "PE IV": g(pe_row, "iv"),
+                "PE Vol": int(g(pe_row, "volume")),
                 "ATM": False,
-            })
+            }
+            if has_greeks:
+                entry.update({
+                    "CE Delta": g(ce_row, "delta"), "CE Gamma": g(ce_row, "gamma"),
+                    "CE Theta": g(ce_row, "theta"), "CE Vega": g(ce_row, "vega"),
+                    "PE Delta": g(pe_row, "delta"), "PE Gamma": g(pe_row, "gamma"),
+                    "PE Theta": g(pe_row, "theta"), "PE Vega": g(pe_row, "vega"),
+                })
+            rows.append(entry)
 
         view = pd.DataFrame(rows)
         if underlying and not view.empty:

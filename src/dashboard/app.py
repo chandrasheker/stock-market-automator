@@ -302,10 +302,18 @@ def show_option_chain(config):
         view = view.iloc[(view["Strike"] - spot).abs().argsort()[: strikes_side * 2 + 1]]
     view = view.sort_values("Strike").reset_index(drop=True)
 
-    _render_option_chain_table(view, spot)
+    view_mode = st.radio(
+        "View", ["OI", "Greeks"], horizontal=True, key=f"chainview_{instrument}",
+        label_visibility="collapsed",
+    )
+    if view_mode == "Greeks":
+        _render_greeks_table(view, spot)
+    else:
+        _render_option_chain_table(view, spot)
+
     st.caption(
-        f"Refresh #{count} · OI in lakhs · ATM row highlighted · "
-        f"ITM shaded · source: {chain.get('source', '—').upper()}"
+        f"Refresh #{count} · OI in lakhs · ATM highlighted · ITM shaded · "
+        f"IV/Greeks computed via Black-Scholes · source: {chain.get('source', '—').upper()}"
     )
 
 
@@ -320,23 +328,18 @@ def _render_chain_header(instrument, chain, inst_labels):
     h4.metric("Updated", chain.get("timestamp", "—"))
 
 
-def _render_option_chain_table(view, spot):
-    """Render the classic Calls | Strike | Puts layout."""
-    disp = pd.DataFrame({
-        "Call OI (L)": (view["CE OI"] / 1e5).round(2),
-        "Call Vol": view["CE Vol"].astype(int),
-        "Call IV": view["CE IV"].round(1),
-        "Call LTP": view["CE LTP"].round(2),
-        "STRIKE": view["Strike"].astype(int),
-        "Put LTP": view["PE LTP"].round(2),
-        "Put IV": view["PE IV"].round(1),
-        "Put Vol": view["PE Vol"].astype(int),
-        "Put OI (L)": (view["PE OI"] / 1e5).round(2),
-    })
-    atm_strike = None
+def _atm_strike(view):
     if view.get("ATM") is not None and view["ATM"].any():
-        atm_strike = int(view.loc[view["ATM"], "Strike"].iloc[0])
+        return int(view.loc[view["ATM"], "Strike"].iloc[0])
+    return None
 
+
+def _oi_pct(oi_series, chg_series):
+    base = (oi_series - chg_series).replace(0, pd.NA)
+    return ((chg_series / base) * 100).round(1).fillna(0)
+
+
+def _chain_styler(disp, view, spot, atm_strike):
     def style_row(row):
         strike = row["STRIKE"]
         is_atm = atm_strike is not None and strike == atm_strike
@@ -356,10 +359,29 @@ def _render_option_chain_table(view, spot):
             out.append(css)
         return out
 
+    return disp.style.apply(style_row, axis=1)
+
+
+def _render_option_chain_table(view, spot):
+    """Render the classic Calls | Strike | Puts layout with OI change %."""
+    has_oichg = "CE OIChg" in view.columns
+    disp = pd.DataFrame({
+        "Call OI (L)": (view["CE OI"] / 1e5).round(2),
+        "Call OI%": _oi_pct(view["CE OI"], view["CE OIChg"]) if has_oichg else 0,
+        "Call IV": view["CE IV"].round(1),
+        "Call LTP": view["CE LTP"].round(2),
+        "STRIKE": view["Strike"].astype(int),
+        "Put LTP": view["PE LTP"].round(2),
+        "Put IV": view["PE IV"].round(1),
+        "Put OI%": _oi_pct(view["PE OI"], view["PE OIChg"]) if has_oichg else 0,
+        "Put OI (L)": (view["PE OI"] / 1e5).round(2),
+    })
+    atm_strike = _atm_strike(view)
     styled = (
-        disp.style.apply(style_row, axis=1)
+        _chain_styler(disp, view, spot, atm_strike)
         .format({
             "Call OI (L)": "{:.2f}", "Put OI (L)": "{:.2f}",
+            "Call OI%": "{:+.1f}%", "Put OI%": "{:+.1f}%",
             "Call LTP": "{:.2f}", "Put LTP": "{:.2f}",
             "Call IV": "{:.1f}", "Put IV": "{:.1f}",
         })
@@ -367,6 +389,36 @@ def _render_option_chain_table(view, spot):
         .set_properties(subset=["Put LTP"], **{"color": "#ef5350", "font-weight": "600"})
     )
     st.dataframe(styled, use_container_width=True, height=560, hide_index=True)
+
+
+def _render_greeks_table(view, spot):
+    """Render per-strike Greeks: Calls | Strike | Puts."""
+    if "CE Delta" not in view.columns:
+        st.info("Greeks unavailable for this chain right now.")
+        return
+    disp = pd.DataFrame({
+        "Call Δ": view["CE Delta"].round(2),
+        "Call Γ": view["CE Gamma"].round(4),
+        "Call Θ": view["CE Theta"].round(1),
+        "Call Vega": view["CE Vega"].round(1),
+        "Call IV": view["CE IV"].round(1),
+        "STRIKE": view["Strike"].astype(int),
+        "Put IV": view["PE IV"].round(1),
+        "Put Vega": view["PE Vega"].round(1),
+        "Put Θ": view["PE Theta"].round(1),
+        "Put Γ": view["PE Gamma"].round(4),
+        "Put Δ": view["PE Delta"].round(2),
+    })
+    atm_strike = _atm_strike(view)
+    styled = _chain_styler(disp, view, spot, atm_strike).format({
+        "Call Δ": "{:.2f}", "Put Δ": "{:.2f}",
+        "Call Γ": "{:.4f}", "Put Γ": "{:.4f}",
+        "Call Θ": "{:.1f}", "Put Θ": "{:.1f}",
+        "Call Vega": "{:.1f}", "Put Vega": "{:.1f}",
+        "Call IV": "{:.1f}", "Put IV": "{:.1f}",
+    })
+    st.dataframe(styled, use_container_width=True, height=560, hide_index=True)
+    st.caption("Δ delta · Γ gamma · Θ theta (₹/day) · Vega (₹ per 1% IV) · IV % (Black-Scholes)")
 
 
 def show_strategy_logic():
