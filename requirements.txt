@@ -27,6 +27,7 @@ aiosqlite>=0.19.0
 
 # Web Dashboard
 streamlit>=1.29.0
+streamlit-autorefresh>=1.0.1
 plotly>=5.18.0
 
 # Scheduling & Async

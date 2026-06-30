@@ -12,6 +12,7 @@ from loguru import logger
 from src.analysis.technical import TechnicalAnalyzer
 from src.backtest.entry_rules import EntryRuleEngine
 from src.config import get_env, get_yaml_config
+from src.toggles import is_action_enabled, is_instrument_enabled
 from src.costs.calculator import CostCalculator
 
 
@@ -187,6 +188,10 @@ class BacktestEngine:
                     continue
 
                 trade_mode = setup["mode"]
+                opt_dir = setup["direction"]
+                if not is_action_enabled(instrument, trade_mode, opt_dir):
+                    continue
+
                 opt_type = setup["opt_type"]
                 trade_direction = (
                     f"{'SELL' if trade_mode == 'SELL_OPTION' else 'BUY'}_{opt_type}"
@@ -230,7 +235,7 @@ class BacktestEngine:
         combined.news_summary = news_summary
 
         for instrument, cfg in self.config["instruments"].items():
-            if not cfg.get("enabled", True):
+            if not is_instrument_enabled(instrument):
                 continue
 
             df = data[instrument] if data and instrument in data else fetcher.fetch_index_history(instrument)

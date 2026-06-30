@@ -13,6 +13,7 @@ from src.analysis.options_analyzer import OptionsAnalyzer
 from src.analysis.technical import TechnicalAnalyzer
 from src.backtest.entry_rules import EntryRuleEngine
 from src.config import get_env, get_yaml_config
+from src.toggles import is_action_enabled, is_instrument_enabled
 from src.costs.calculator import CostCalculator
 from src.data.historical import HistoricalDataFetcher
 from src.data.news_fetcher import NewsFetcher
@@ -85,7 +86,7 @@ class SignalEngine:
     def scan_all(self) -> list[TradeOpportunity]:
         opportunities = []
         for instrument_key, cfg in self.config["instruments"].items():
-            if not cfg.get("enabled", True):
+            if not is_instrument_enabled(instrument_key):
                 continue
             try:
                 opp = self.scan_instrument(instrument_key)
@@ -128,6 +129,11 @@ class SignalEngine:
 
         trade_mode = setup["mode"]
         opt_direction = setup["direction"]
+
+        if not is_action_enabled(instrument_key, trade_mode, opt_direction):
+            logger.debug(f"{instrument_key}: {trade_mode} {opt_direction} disabled by user toggle")
+            return None
+
         opt_type = setup["opt_type"]
 
         confidence = self.entry_rules.compute_confidence(

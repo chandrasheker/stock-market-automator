@@ -16,10 +16,17 @@ from src.analysis.signal_engine import SignalEngine
 from src.auth.kite_auth import KiteAuth
 from src.backtest.engine import BacktestEngine
 from src.config import get_env, get_yaml_config
+from src.toggles import load_toggles, save_toggles
+from src.dashboard.strategy_docs import BACKTEST_METHODOLOGY_MD, STRATEGY_LOGIC_MD
 from src.data.database import DailyPnL, Trade, TradeSignal, get_session, init_db
 from src.data.historical import HistoricalDataFetcher
 from src.data.news_fetcher import NewsFetcher
+from src.data.option_chain_live import LiveOptionChainService
 from src.risk.manager import RiskManager
+
+# Singleton chain service for live updates across reruns
+if "chain_service" not in st.session_state:
+    st.session_state.chain_service = LiveOptionChainService()
 
 st.set_page_config(
     page_title="Options Trading Automator",
@@ -40,7 +47,10 @@ def main():
 
     page = st.sidebar.radio(
         "Navigation",
-        ["Dashboard", "Live Signals", "Positions", "News", "Backtest", "Daily Report", "Settings"],
+        [
+            "Dashboard", "Option Chain", "Live Signals", "Strategy Logic",
+            "Positions", "News", "Backtest", "Daily Report", "Settings",
+        ],
     )
 
     st.sidebar.divider()
@@ -51,8 +61,12 @@ def main():
 
     if page == "Dashboard":
         show_dashboard(env)
+    elif page == "Option Chain":
+        show_option_chain(config)
     elif page == "Live Signals":
         show_signals()
+    elif page == "Strategy Logic":
+        show_strategy_logic()
     elif page == "Positions":
         show_positions()
     elif page == "News":
@@ -63,6 +77,95 @@ def main():
         show_daily_report()
     elif page == "Settings":
         show_settings(env, config)
+
+
+def show_option_chain(config):
+    st.title("Live Option Chain")
+
+    from streamlit_autorefresh import st_autorefresh
+
+    refresh_sec = config.get("option_chain", {}).get("refresh_seconds", 3)
+    st.caption(f"Auto-refresh every {refresh_sec}s during market hours")
+
+    inst_labels = {
+        "nifty50": "NIFTY 50",
+        "sensex": "SENSEX",
+        "crude_oil": "CRUDE OIL",
+    }
+    toggles = load_toggles()
+    enabled_insts = [k for k, v in toggles.items() if v.get("enabled", True)]
+    if not enabled_insts:
+        st.warning("All instruments are OFF. Enable at least one in Settings.")
+        return
+
+    instrument = st.selectbox(
+        "Instrument",
+        enabled_insts,
+        format_func=lambda x: inst_labels.get(x, x),
+    )
+
+    # Auto-refresh (no manual click needed)
+    count = st_autorefresh(interval=refresh_sec * 1000, key=f"chain_{instrument}")
+
+    service: LiveOptionChainService = st.session_state.chain_service
+
+    # Try Kite for faster ticks when logged in
+    try:
+        auth = KiteAuth()
+        if auth.is_authenticated():
+            from src.data.live_feed import LiveFeedManager
+            if "kite_feed" not in st.session_state:
+                feed = LiveFeedManager(auth.get_client())
+                feed.start()
+                st.session_state.kite_feed = feed
+            service.set_kite_feed(st.session_state.kite_feed)
+            st.success("Kite WebSocket connected — tick-level LTP overlay active", icon="⚡")
+    except Exception:
+        st.info("NSE polling mode (login to Kite for WebSocket overlay)")
+
+    chain = service.fetch_chain(instrument)
+
+    if not chain.get("valid"):
+        st.warning("Could not load option chain. Market may be closed or API unavailable.")
+        if instrument == "crude_oil":
+            st.caption("Crude Oil chain requires Zerodha Kite login (MCX).")
+        return
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Spot", f"₹{chain.get('underlying', 0):,.2f}")
+    m2.metric("PCR", f"{chain.get('pcr', 0):.2f}")
+    m3.metric("Max Pain", f"₹{chain.get('max_pain', 0):,.0f}")
+    m4.metric("Expiry", chain.get("expiry", "—"))
+    m5.metric("Updated", chain.get("timestamp", "—"))
+
+    view = chain.get("chain_view", pd.DataFrame())
+    if view.empty:
+        return
+
+    # Highlight ATM row
+    strikes_side = config.get("option_chain", {}).get("strikes_each_side", 10)
+    if chain.get("underlying"):
+        spot = chain["underlying"]
+        view = view.iloc[(view["Strike"] - spot).abs().argsort()[: strikes_side * 2 + 1]]
+
+    def highlight_atm(row):
+        return ["background-color: #1a3a5c" if row.get("ATM") else "" for _ in row]
+
+    styled = view.style.apply(highlight_atm, axis=1).format({
+        "CE LTP": "{:.2f}", "PE LTP": "{:.2f}",
+        "CE IV": "{:.1f}", "PE IV": "{:.1f}",
+    })
+    st.dataframe(styled, use_container_width=True, height=500)
+
+    st.caption(f"Refresh #{count} | ATM row highlighted | CE=Call, PE=Put")
+
+
+def show_strategy_logic():
+    st.title("Strategy & Backtest Logic")
+    st.markdown(STRATEGY_LOGIC_MD)
+    st.divider()
+    st.subheader("Backtest Methodology")
+    st.markdown(BACKTEST_METHODOLOGY_MD)
 
 
 def show_dashboard(env):
@@ -84,7 +187,8 @@ def show_dashboard(env):
         st.subheader("Market Overview")
         fetcher = HistoricalDataFetcher()
         for key, cfg in get_yaml_config()["instruments"].items():
-            if cfg.get("enabled"):
+            if not load_toggles().get(key, {}).get("enabled", True):
+                continue
                 try:
                     df = fetcher.fetch_index_history(key, days=30)
                     if not df.empty:
@@ -142,10 +246,14 @@ def show_signals():
                 ):
                     c1, c2, c3 = st.columns(3)
                     c1.metric("Entry Price", f"₹{opp.entry_price}")
-                    c2.metric("Target (+20%)", f"₹{opp.target_price}")
+                    mode_label = "Target" if opp.trade_mode == "BUY_OPTION" else "Buy-back"
+                    c2.metric(mode_label, f"₹{opp.target_price}")
                     c3.metric("Stop Loss", f"₹{opp.stop_loss}")
 
-                    st.markdown(f"**Strike:** {opp.strike} | **Lot Size:** {opp.lot_size}")
+                    st.markdown(
+                        f"**{opp.direction}** | Strike: {opp.strike} | "
+                        f"Lot: {opp.lot_size} | Est. costs: ₹{opp.estimated_costs:.0f}"
+                    )
                     st.markdown(f"**Reasoning:** {opp.reasoning}")
 
                     if opp.strategy_scores:
@@ -263,6 +371,9 @@ def show_daily_report():
 
 def show_backtest():
     st.title("Strategy Backtest")
+    with st.expander("How is backtest run?", expanded=False):
+        st.markdown(BACKTEST_METHODOLOGY_MD)
+
     instrument = st.selectbox(
         "Instrument", ["all", "nifty50", "sensex", "crude_oil"]
     )
@@ -341,8 +452,50 @@ def show_backtest():
 
 
 def show_settings(env, config):
-    st.title("Settings & Kite Login")
+    st.title("Settings & Controls")
 
+    st.subheader("Instrument On/Off & Trade Types")
+    st.caption("Turn off Crude Oil if P&L is too low. Control each Buy/Sell × CE/PE separately.")
+
+    toggles = load_toggles()
+    inst_names = {
+        "nifty50": "NIFTY 50",
+        "sensex": "SENSEX",
+        "crude_oil": "CRUDE OIL",
+    }
+    changed = False
+
+    for inst, label in inst_names.items():
+        with st.expander(f"{label} — {'ON' if toggles[inst].get('enabled') else 'OFF'}", expanded=inst == "nifty50"):
+            new_enabled = st.toggle(f"Enable {label}", value=toggles[inst].get("enabled", True), key=f"en_{inst}")
+            c1, c2, c3, c4 = st.columns(4)
+            buy_ce = c1.toggle("Buy CE", value=toggles[inst].get("buy_ce", True), key=f"bce_{inst}")
+            buy_pe = c2.toggle("Buy PE", value=toggles[inst].get("buy_pe", True), key=f"bpe_{inst}")
+            sell_ce = c3.toggle("Sell CE", value=toggles[inst].get("sell_ce", True), key=f"sce_{inst}")
+            sell_pe = c4.toggle("Sell PE", value=toggles[inst].get("sell_pe", True), key=f"spe_{inst}")
+
+            if (
+                new_enabled != toggles[inst].get("enabled")
+                or buy_ce != toggles[inst].get("buy_ce")
+                or buy_pe != toggles[inst].get("buy_pe")
+                or sell_ce != toggles[inst].get("sell_ce")
+                or sell_pe != toggles[inst].get("sell_pe")
+            ):
+                toggles[inst] = {
+                    "enabled": new_enabled,
+                    "buy_ce": buy_ce,
+                    "buy_pe": buy_pe,
+                    "sell_ce": sell_ce,
+                    "sell_pe": sell_pe,
+                }
+                changed = True
+
+    if changed:
+        save_toggles(toggles)
+        st.success("Toggles saved!")
+        st.rerun()
+
+    st.divider()
     st.subheader("Zerodha Kite Connect")
     auth = KiteAuth()
 

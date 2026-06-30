@@ -136,8 +136,9 @@ python -m src.main run
 | `python -m src.main login` | Authenticate with Zerodha |
 | `python -m src.main download` | Download historical data |
 | `python -m src.main scan` | One-time market scan |
-| `python -m src.main backtest --instrument nifty50` | Run backtest |
-| `python -m src.main run` | Start automated trading bot |
+| `python -m src.main backtest` | Backtest all instruments (net of taxes) |
+| `python -m src.main daily-backtest` | Run daily backtest + news alignment now |
+| `python -m src.main run` | Start bot (auto daily backtest at 8:00 AM) |
 | `streamlit run src/dashboard/app.py` | Launch web dashboard |
 
 ## Running as a Service (systemd)
