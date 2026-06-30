@@ -42,7 +42,9 @@ class TradePipeline:
             if not ok:
                 return False, reason
 
-        if self.config.get("option_selling", {}).get("min_iv_percentile"):
+        # India VIX / IV percentile gate applies to index options only
+        is_index = instrument in ("nifty50", "sensex")
+        if is_index and self.config.get("option_selling", {}).get("min_iv_percentile"):
             ok, reason = self.iv.allows_selling(vix)
             if not ok:
                 return False, reason

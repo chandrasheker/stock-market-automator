@@ -49,9 +49,11 @@ class LiveFeedManager:
         try:
             from kiteconnect import KiteTicker
 
+            self._error_count = 0
             self.ticker = KiteTicker(
                 self.env.kite_api_key,
                 self.kite.access_token if hasattr(self.kite, "access_token") else self.env.kite_access_token,
+                reconnect=False,  # don't spam retries on 403/forbidden
             )
             self.ticker.on_ticks = self._handle_ticks
             self.ticker.on_connect = self._on_connect
@@ -59,12 +61,14 @@ class LiveFeedManager:
             self.ticker.on_error = self._on_error
 
             self._running = True
-            self._thread = threading.Thread(target=self.ticker.connect, daemon=True)
+            self._thread = threading.Thread(
+                target=lambda: self.ticker.connect(threaded=True), daemon=True
+            )
             self._thread.start()
             logger.info("Live feed started")
             return True
         except Exception as e:
-            logger.error(f"Failed to start live feed: {e}")
+            logger.warning(f"Live feed unavailable (REST still works): {e}")
             return False
 
     def stop(self):
@@ -84,11 +88,24 @@ class LiveFeedManager:
             ws.set_mode(ws.MODE_FULL, self.subscribed_tokens)
 
     def _on_close(self, ws, code, reason):
-        logger.warning(f"WebSocket closed: {code} - {reason}")
         self._running = False
+        try:
+            ws.stop()
+        except Exception:
+            pass
 
     def _on_error(self, ws, code, reason):
-        logger.error(f"WebSocket error: {code} - {reason}")
+        self._error_count = getattr(self, "_error_count", 0) + 1
+        if self._error_count <= 1:
+            logger.warning(
+                f"WebSocket unavailable ({code} - {reason}). "
+                "Falling back to REST quotes — option chain still works."
+            )
+        self._running = False
+        try:
+            ws.close()
+        except Exception:
+            pass
 
     def _handle_ticks(self, ws, ticks):
         for tick in ticks:

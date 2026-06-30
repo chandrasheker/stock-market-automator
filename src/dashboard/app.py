@@ -69,6 +69,16 @@ def main():
     )
 
     st.sidebar.divider()
+    from src.utils.clock import ist_now
+    from src.filters.time_window import TimeWindowFilter
+    _now = ist_now()
+    _tw = TimeWindowFilter()
+    _open = _tw.is_market_open("nifty50")
+    st.sidebar.markdown(
+        f"**IST:** {_now.strftime('%a %H:%M:%S')} · "
+        f"{'🟢 Market OPEN' if _open else '🔴 Market closed'}"
+    )
+
     profit_mode = config.get("profit_mode", {}).get("enabled", False)
     if profit_mode:
         st.sidebar.success("Profit Mode: SELL premium only")
@@ -218,17 +228,20 @@ def show_option_chain(config):
     service: LiveOptionChainService = st.session_state.chain_service
 
     # Try Kite for live chain (required on cloud VMs — NSE blocks Oracle Cloud IPs)
+    use_ws = config.get("option_chain", {}).get("use_websocket", False)
     try:
         auth = KiteAuth()
         if auth.is_authenticated():
             service.set_kite_client(auth.get_client())
-            from src.data.live_feed import LiveFeedManager
-            if "kite_feed" not in st.session_state:
+            # WebSocket is optional — REST quotes work everywhere and avoid 403 spam
+            if use_ws and "kite_feed" not in st.session_state:
+                from src.data.live_feed import LiveFeedManager
                 feed = LiveFeedManager(auth.get_client())
-                feed.start()
-                st.session_state.kite_feed = feed
-            service.set_kite_feed(st.session_state.kite_feed)
-            st.success("Kite connected — live option chain via Zerodha API", icon="⚡")
+                if feed.start():
+                    st.session_state.kite_feed = feed
+            if st.session_state.get("kite_feed"):
+                service.set_kite_feed(st.session_state.kite_feed)
+            st.success("Kite connected — live option chain via Zerodha REST API", icon="⚡")
         else:
             st.warning(
                 "**Login to Zerodha Kite** (Settings page) to load the option chain. "

@@ -206,19 +206,27 @@ risk:
 # Major event blocking for premium selling
 events:
   enabled: true
-  block_expiry_day_sells: true
+  block_on_news_keywords: true   # block sells when scheduled-event phrases appear in news
+  block_expiry_day_sells: false  # opt-in: avoid new index sells on expiry day
+  expiry_block_after_hour: 14    # if above is true, only block from 2 PM IST
   keywords:
     - rbi policy
-    - repo rate
+    - rbi monetary policy
+    - monetary policy committee
     - mpc meeting
+    - mpc decision
+    - repo rate decision
+    - rate decision
     - union budget
-    - fed meeting
-    - fomc
-    - cpi data
-    - inflation data
-    - gdp data
-    - expiry
+    - interim budget
+    - fomc meeting
+    - fomc decision
+    - fed rate decision
+    - fed policy
+    - fed decision
+    - election results
     - election result
+    - exit poll
   blocked_dates: []
 
 # IV percentile analysis (India VIX)
@@ -235,6 +243,7 @@ costs:
 option_chain:
   refresh_seconds: 3
   strikes_each_side: 10
+  use_websocket: false   # REST quotes work everywhere; WS often 403s on cloud VMs
 daily_backtest:
   enabled: true
   run_at: "08:00"            # IST, before market open

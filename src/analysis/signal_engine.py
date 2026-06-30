@@ -17,6 +17,7 @@ from src.toggles import is_action_enabled, is_any_buy_enabled, is_instrument_ena
 from src.costs.calculator import CostCalculator
 from src.data.historical import HistoricalDataFetcher
 from src.data.news_fetcher import NewsFetcher
+from src.data.option_chain_live import LiveOptionChainService
 from src.filters.pipeline import TradePipeline
 
 
@@ -87,6 +88,7 @@ class SignalEngine:
         self.data_fetcher = HistoricalDataFetcher()
         self.news = NewsFetcher()
         self.pipeline = TradePipeline()
+        self.chain_service = LiveOptionChainService()
         self.profit_target = self.env.profit_target_pct / 100
         self.stop_loss = self.env.stop_loss_pct / 100
         sell_cfg = self.config.get("option_selling", {})
@@ -266,8 +268,8 @@ class SignalEngine:
             if float(latest["adx"]) < 20:
                 return None
 
-        chain_data = self.data_fetcher.fetch_option_chain_snapshot(cfg["underlying"])
-        chain_analysis = self.options.analyze_chain(chain_data) if chain_data else {"valid": False}
+        # Option chain via Kite (works on cloud VMs; NSE fallback for NIFTY only)
+        chain_df, chain_analysis = self.chain_service.get_chain_for_scan(instrument_key)
 
         scores = self._score_strategies(
             trend, breakout, chain_analysis, news_sentiment, vix, df
@@ -287,7 +289,8 @@ class SignalEngine:
             return None
 
         underlying = chain_analysis.get("underlying", float(df["close"].iloc[-1]))
-        chain_df = self.options.parse_option_chain(chain_data) if chain_data else pd.DataFrame()
+        if not underlying:
+            underlying = float(df["close"].iloc[-1])
         otm = 2 if trade_mode == "SELL_OPTION" else 1
         strike_info = self.options.select_strike(
             chain_df, direction, underlying,

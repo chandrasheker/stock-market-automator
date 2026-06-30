@@ -103,16 +103,22 @@ class EntryRuleEngine:
         atr_pct = latest["atr"] / latest["close"] if latest["close"] > 0 else 0
         rsi = float(latest["rsi"])
 
+        # India VIX only applies to index options; commodities use their own ATR vol
+        is_index = instrument in ("nifty50", "sensex")
+
         # Sell premium when trend is weak and volatility elevated
         max_adx = sell_cfg.get("max_adx", 22)
         min_vix = sell_cfg.get("min_vix", 14)
-        vix_ok = vix >= min_vix if vix > 0 else atr_pct >= sell_cfg.get("min_atr_pct", 0.012)
+        if is_index and vix > 0:
+            vix_ok = vix >= min_vix
+        else:
+            vix_ok = atr_pct >= sell_cfg.get("min_atr_pct", 0.012)
 
         if adx > max_adx or not vix_ok:
             return None
 
-        # IV percentile gate — avoid selling in low-vol regimes
-        if sell_cfg.get("min_iv_percentile"):
+        # IV percentile gate — index only (uses India VIX history)
+        if is_index and sell_cfg.get("min_iv_percentile"):
             from src.filters.iv_analysis import IVAnalyzer
             iv_ok, _ = IVAnalyzer().allows_selling(vix)
             if not iv_ok:

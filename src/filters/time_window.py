@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time as dt_time
+from datetime import time as dt_time
 
 from src.config import get_yaml_config
+from src.utils.clock import ist_now, ist_time
 
 
 class TimeWindowFilter:
@@ -31,10 +32,10 @@ class TimeWindowFilter:
         return dt_time(h, m)
 
     def _now(self) -> dt_time:
-        return datetime.now().time()
+        return ist_time()
 
     def is_market_open(self, instrument: str = "nifty50") -> bool:
-        now = datetime.now()
+        now = ist_now()
         if now.weekday() >= 5:
             return False
         if instrument == "crude_oil":

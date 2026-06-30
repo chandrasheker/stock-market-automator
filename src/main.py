@@ -40,7 +40,7 @@ class TradingBot:
         self.order_manager = None
         self.live_feed = LiveFeedManager()
         self.kite_auth = KiteAuth()
-        self.scheduler = BackgroundScheduler()
+        self.scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
         self._running = False
 
         init_db()
@@ -194,7 +194,9 @@ class TradingBot:
             logger.error(f"Daily backtest failed: {e}")
 
     def _is_market_hours(self) -> bool:
-        now = datetime.now()
+        from src.utils.clock import ist_now
+
+        now = ist_now()
         if now.weekday() >= 5:
             return False
         market_open = dt_time(9, 15)

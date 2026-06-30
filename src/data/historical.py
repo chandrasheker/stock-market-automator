@@ -136,8 +136,15 @@ class HistoricalDataFetcher:
             logger.warning(f"NSE fetch failed for {index_name}: {e}")
             return pd.DataFrame()
 
+    # NSE only serves these index option chains; SENSEX/CRUDEOIL need Kite
+    NSE_CHAIN_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
+
     def fetch_option_chain_snapshot(self, underlying: str = "NIFTY") -> dict:
         """Fetch live option chain from NSE (often blocked on cloud VMs — prefer Kite)."""
+        if underlying.upper() not in self.NSE_CHAIN_SYMBOLS:
+            # NSE doesn't serve this symbol (e.g. SENSEX on BSE, CRUDEOIL on MCX)
+            return {}
+
         self._nse_session_init()
         url = f"https://www.nseindia.com/api/option-chain-indices?symbol={underlying}"
 

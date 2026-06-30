@@ -13,6 +13,7 @@ from loguru import logger
 from src.analysis.options_analyzer import OptionsAnalyzer
 from src.config import get_yaml_config
 from src.data.historical import HistoricalDataFetcher
+from src.utils.clock import ist_now
 
 # NSE blocks most cloud VM IPs (403). Kite is the reliable source on Oracle Cloud.
 SPOT_SYMBOLS = {
@@ -40,6 +41,18 @@ class LiveOptionChainService:
         self._poll_thread: Optional[threading.Thread] = None
         self._running = False
         self._callbacks: list[Callable] = []
+        self._instruments_cache: dict[str, tuple] = {}  # exchange -> (date, instruments)
+
+    def _get_instruments(self, kite, exchange: str) -> list:
+        """Cache the (large) instruments dump per exchange per day."""
+        from datetime import date as _date
+
+        cached = self._instruments_cache.get(exchange)
+        if cached and cached[0] == _date.today():
+            return cached[1]
+        instruments = kite.instruments(exchange)
+        self._instruments_cache[exchange] = (_date.today(), instruments)
+        return instruments
 
     def set_kite_feed(self, feed):
         self._kite_feed = feed
@@ -53,7 +66,7 @@ class LiveOptionChainService:
         self._callbacks.append(callback)
 
     def is_market_open(self, instrument_key: str = "nifty50") -> bool:
-        now = datetime.now()
+        now = ist_now()
         if now.weekday() >= 5:
             return False
         if instrument_key == "crude_oil":
@@ -196,6 +209,32 @@ class LiveOptionChainService:
     def get_cached(self, instrument_key: str) -> dict:
         return self._cache.get(instrument_key, {"valid": False})
 
+    def get_chain_for_scan(self, instrument_key: str) -> tuple:
+        """Return (chain_df, analysis) for the signal engine.
+
+        Uses Kite when available (works on cloud VMs); falls back to NSE only
+        for NIFTY. Never raises — returns (empty df, {valid: False}) on failure.
+        """
+        import pandas as _pd
+
+        meta = self.CHAIN_SOURCES.get(instrument_key)
+        if not meta:
+            return _pd.DataFrame(), {"valid": False}
+
+        kite = self._get_kite()
+        raw = None
+        if kite:
+            raw = self._fetch_via_kite(instrument_key, meta, kite)
+        if not raw and instrument_key == "nifty50":
+            raw = self.fetcher.fetch_option_chain_snapshot(meta["underlying"])
+
+        if not raw:
+            return _pd.DataFrame(), {"valid": False}
+
+        df = self.analyzer.parse_option_chain(raw)
+        analysis = self.analyzer.analyze_chain(raw)
+        return df, analysis
+
     def _overlay_kite_ticks(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty or not self._kite_feed:
             return df
@@ -218,7 +257,7 @@ class LiveOptionChainService:
         strikes_side = self.config.get("option_chain", {}).get("strikes_each_side", 10)
 
         try:
-            instruments = kite.instruments(exchange)
+            instruments = self._get_instruments(kite, exchange)
             opts = [
                 i for i in instruments
                 if i.get("name") == underlying and i.get("instrument_type") in ("CE", "PE")
