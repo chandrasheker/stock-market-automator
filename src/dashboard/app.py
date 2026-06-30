@@ -553,12 +553,25 @@ def show_trade_ideas(env, config):
 
     status = _render_capital_banner(env)
 
+    engine = SignalEngine()
+
+    # Per-instrument scanner status — confirms all three are covered
+    st.subheader("Scanning")
+    scan_states = engine.scan_status()
+    cols = st.columns(len(scan_states)) if scan_states else []
+    state_icon = {"Scanning": "🟢", "Waiting": "🟡", "Market closed": "🔴", "OFF": "⚪"}
+    for col, s in zip(cols, scan_states):
+        col.markdown(
+            f"**{s['instrument']}**\n\n{state_icon.get(s['state'], '⚪')} {s['state']}\n\n"
+            f"<span style='font-size:0.8rem;opacity:0.8'>{s['detail']}</span>",
+            unsafe_allow_html=True,
+        )
+
     show_buy = st.toggle("Also show BUY ideas (info only)", value=False, key="ideas_show_buy")
     min_edge = st.slider("Minimum edge score", 30, 80, 45, 5, key="ideas_min_edge")
 
-    with st.spinner("Analyzing live market for the best edges..."):
+    with st.spinner("Analyzing NIFTY, SENSEX and Crude for the best edges..."):
         try:
-            engine = SignalEngine()
             ideas = engine.get_trade_ideas(include_buy=show_buy, min_edge=float(min_edge))
         except Exception as e:
             st.error(f"Could not scan: {e}")

@@ -103,12 +103,23 @@ class SignalEngine:
     def scan_all(self, include_buy_suggestions: bool = False) -> list[TradeOpportunity]:
         """Return executable opportunities (sell-first). Optionally include buy as warnings."""
         opportunities = []
-        for instrument_key in self.config["instruments"]:
+        all_insts = list(self.config["instruments"].keys())
+        enabled = [k for k in all_insts if is_instrument_enabled(k)]
+        disabled = [k for k in all_insts if k not in enabled]
+        logger.info(
+            f"Scanning {len(enabled)} instrument(s): {enabled}"
+            + (f" | skipped (disabled): {disabled}" if disabled else "")
+        )
+
+        for instrument_key in all_insts:
             if not is_instrument_enabled(instrument_key):
+                logger.info(f"  {instrument_key}: skipped — disabled in Settings")
                 continue
             try:
                 sell_opps = self._scan_sell_opportunities(instrument_key)
                 opportunities.extend(sell_opps)
+                if sell_opps:
+                    logger.info(f"  {instrument_key}: ✅ {len(sell_opps)} SELL idea(s) found")
 
                 if include_buy_suggestions:
                     buy_shadow = self._scan_buy_shadow(instrument_key)
@@ -134,13 +145,14 @@ class SignalEngine:
             instrument_key, "SELL_OPTION", vix, news_sentiment.get("headlines")
         )
         if not ok:
-            logger.debug(f"Pipeline blocked {instrument_key}: {reason}")
+            logger.info(f"  {instrument_key}: ⏸ {reason}")
             return []
 
         cfg = self.config["instruments"][instrument_key]
 
         hist = self.data_fetcher.fetch_index_history(instrument_key)
         if hist.empty or len(hist) < 30:
+            logger.info(f"  {instrument_key}: no historical data to analyze")
             return []
 
         df = self.technical.add_all_indicators(hist)
@@ -154,11 +166,16 @@ class SignalEngine:
             vix, news_sentiment,
         )
         if not setup:
+            logger.info(
+                f"  {instrument_key}: no qualifying sell setup "
+                f"(trend={trend['direction']} adx={float(latest['adx']):.0f} — not range-bound enough)"
+            )
             return []
 
         direction = setup["direction"]
         opt_type = setup["opt_type"]
         if not is_action_enabled(instrument_key, "SELL_OPTION", direction):
+            logger.info(f"  {instrument_key}: {direction} sell action is OFF in toggles")
             return []
 
         opp = self._build_opportunity(
