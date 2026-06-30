@@ -28,10 +28,12 @@ NSE_HEADERS = {
 class HistoricalDataFetcher:
     """Fetches and caches historical data from multiple sources."""
 
+    # nse_symbol is only set where NSE actually serves the data (NIFTY family).
+    # SENSEX is on BSE, CRUDEOIL is on MCX — they must never hit NSE.
     INDEX_MAP = {
         "nifty50": {"yfinance": "^NSEI", "nse_symbol": "NIFTY 50"},
-        "sensex": {"yfinance": "^BSESN", "nse_symbol": "SENSEX"},
-        "crude_oil": {"yfinance": "CL=F", "nse_symbol": "CRUDEOIL"},
+        "sensex": {"yfinance": "^BSESN", "nse_symbol": None},
+        "crude_oil": {"yfinance": "CL=F", "nse_symbol": None},
     }
 
     def __init__(self):
@@ -66,7 +68,8 @@ class HistoricalDataFetcher:
             raise ValueError(f"Unknown instrument: {instrument_key}")
 
         df = self._fetch_yfinance(mapping["yfinance"], days)
-        if df.empty:
+        if df.empty and mapping.get("nse_symbol"):
+            # NSE historical fallback — only for NSE-listed indices (NIFTY family)
             df = self._fetch_nse_index(mapping["nse_symbol"], days)
 
         if not df.empty:
