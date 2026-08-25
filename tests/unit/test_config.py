@@ -25,3 +25,11 @@ def test_empty_rate_is_none(monkeypatch) -> None:  # type: ignore[no-untyped-def
 def test_data_dir_path() -> None:
     settings = Settings(data_dir=Path("./data"), _env_file=None)
     assert settings.data_dir == Path("./data")
+
+
+def test_strips_quoted_credentials(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("KITE_API_KEY", '  "abcKEY12xyz"  ')
+    monkeypatch.setenv("KITE_ACCESS_TOKEN", "'tok_value_here_ok'")
+    settings = Settings(_env_file=None)
+    assert settings.kite_api_key == "abcKEY12xyz"
+    assert settings.kite_access_token == "tok_value_here_ok"

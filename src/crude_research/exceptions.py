@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 
@@ -23,6 +24,14 @@ class AmbiguousFutureMappingError(CrudeResearchError):
     def __init__(self, message: str, *, candidates: list[dict[str, Any]] | None = None) -> None:
         super().__init__(message)
         self.candidates = candidates or []
+
+
+class UnknownOptionExpiryError(CrudeResearchError):
+    """Requested option expiry is not in the instrument master."""
+
+    def __init__(self, message: str, *, available: list[date] | None = None) -> None:
+        super().__init__(message)
+        self.available = available or []
 
 
 class QuoteRequestError(CrudeResearchError):

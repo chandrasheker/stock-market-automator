@@ -190,7 +190,11 @@ def fetch_full_quotes(
         try:
             payload = broker.quote(batch)
         except Exception as exc:
-            raise QuoteRequestError(f"Kite full-quote request failed for {len(batch)} instruments: {exc}") from exc
+            from crude_research.diagnostics.kite_auth import format_kite_exception
+
+            raise QuoteRequestError(
+                f"Kite full-quote request failed for {len(batch)} instruments: {format_kite_exception(exc)}"
+            ) from exc
         for key in batch:
             item = payload.get(key)
             if item is None:

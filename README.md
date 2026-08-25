@@ -227,7 +227,30 @@ python -m crude_research.cli doctor
 
 Use a real option expiry from `instruments expiries`, not the placeholder `YYYY-MM-DD`.
 
-## 13. Known assumptions and limitations
+On this dump, CRUDEOILM option last-trading-days were `2026-09-17`, `2026-10-15`, `2026-11-17` — **not** `2026-10-16` (that is near the October *futures* expiry `2026-10-19`). MCX options expire two business days before the futures last trading day.
+
+## 13. Troubleshooting: `TokenException`
+
+`kite_credentials: present` only means `.env` has non-empty strings. Kite still rejects them when:
+
+* the **access_token expired** (Zerodha issues a new one every trading day)
+* `KITE_ACCESS_TOKEN` is actually the **api_secret** or the one-time **request_token**
+* `KITE_API_KEY` does not belong to that access_token
+* values were pasted with quotes or trailing spaces (the CLI now strips these)
+
+`doctor` prints a fingerprint only (`ab…yz (len=N)`), never the secret, plus Kite's error text.
+
+Fix:
+
+1. Open https://developers.kite.trade/ → your app → copy **api_key** (not api_secret) into `KITE_API_KEY`.
+2. Complete the [login flow](https://kite.trade/docs/connect/v3/user/#login-flow) and put today's **access_token** from `generate_session` into `KITE_ACCESS_TOKEN`.
+3. No quotes: `KITE_ACCESS_TOKEN=xxxxxxxx` not `"xxxxxxxx"`.
+4. Re-run `python -m crude_research.cli doctor`.
+5. Then snapshot with a listed expiry, e.g. `2026-10-15` if that is what `instruments expiries CRUDEOILM` printed.
+
+Today's instrument cache can still be read when the token is dead (`instruments expiries` worked from Parquet). **Live quotes still need a valid daily token.**
+
+## 14. Known assumptions and limitations
 
 ### Option-to-futures mapping
 

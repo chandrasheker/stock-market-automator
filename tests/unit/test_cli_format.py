@@ -16,7 +16,20 @@ def test_doctor_offline() -> None:
     names = {c.name for c in report.checks}
     assert "python_version" in names
     assert "kite_credentials" in names
-    assert all("token" not in c.detail.lower() or "missing" in c.detail.lower() or "present" in c.detail.lower() for c in report.checks)
+    joined = " ".join(c.detail for c in report.checks)
+    assert "KITE_API_KEY" in joined
+    assert "<empty>" in joined
+
+
+def test_mask_never_prints_full_secret() -> None:
+    from crude_research.diagnostics.kite_auth import inspect_secret, mask_secret
+
+    secret = "abcdefghijklmnop"
+    assert secret not in mask_secret(secret)
+    view = inspect_secret("KITE_ACCESS_TOKEN", '  "abcdefghijklmnop"  ')
+    assert "WRAPPED_IN_QUOTES" in view.issues
+    assert "LEADING_OR_TRAILING_WHITESPACE" in view.issues
+    assert secret not in view.fingerprint
 
 
 def test_table_mentions_not_a_recommendation() -> None:

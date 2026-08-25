@@ -219,8 +219,16 @@ def doctor() -> None:
     settings = _settings()
     report = run_doctor(settings, try_network=True)
     for check in report.checks:
+        if check.name == "kite_debug":
+            typer.echo(f"[INFO] {check.detail}")
+            continue
         mark = "OK" if check.ok else "FAIL"
         typer.echo(f"[{mark}] {check.name}: {check.detail}")
+    if report.hints:
+        typer.echo("")
+        typer.echo("How to fix TokenException:")
+        for hint in report.hints:
+            typer.echo(f"  - {hint}")
     if not report.ok:
         raise typer.Exit(code=1)
 
@@ -234,7 +242,19 @@ def instruments_sync(
     if not settings.has_kite_credentials():
         typer.echo("KITE_API_KEY / KITE_ACCESS_TOKEN missing; cannot sync.")
         raise typer.Exit(code=1)
-    records = _load_master(settings, force=force)
+    try:
+        records = _load_master(settings, force=force)
+    except Exception as exc:
+        from crude_research.diagnostics.kite_auth import (
+            format_kite_exception,
+            token_exception_hints,
+        )
+
+        typer.echo(format_kite_exception(exc), err=True)
+        if type(exc).__name__ == "TokenException":
+            for hint in token_exception_hints(settings.kite_api_key, settings.kite_access_token):
+                typer.echo(f"  - {hint}", err=True)
+        raise typer.Exit(code=1) from exc
     crude = sum(1 for row in records if row.underlying and row.underlying.value == "CRUDEOIL")
     mini = sum(1 for row in records if row.underlying and row.underlying.value == "CRUDEOILM")
     typer.echo(f"MCX instruments: {len(records)} (CRUDEOIL={crude}, CRUDEOILM={mini})")
@@ -267,13 +287,17 @@ def chain_snapshot(
 ) -> None:
     """Fetch full quotes, reconstruct the chain, compute IV/Greeks, optionally persist."""
     settings = _settings()
-    snapshot, path = _build_live_chain(
-        settings,
-        underlying=underlying,
-        expiry=_parse_expiry(expiry),
-        rate=risk_free_rate,
-        persist=persist,
-    )
+    try:
+        snapshot, path = _build_live_chain(
+            settings,
+            underlying=underlying,
+            expiry=_parse_expiry(expiry),
+            rate=risk_free_rate,
+            persist=persist,
+        )
+    except CrudeResearchError as exc:
+        typer.echo(f"{type(exc).__name__}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     typer.echo(format_chain_table(snapshot))
     if path:
         typer.echo(f"\nPersisted: {path}")

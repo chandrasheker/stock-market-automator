@@ -48,8 +48,15 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _empty_to_none(cls, value: object) -> object:
-        if value == "":
+        if value is None or value == "":
             return None
+        if isinstance(value, str):
+            cleaned = value.strip().strip("\ufeff")
+            if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"'", '"'}:
+                cleaned = cleaned[1:-1].strip()
+            if cleaned == "":
+                return None
+            return cleaned
         return value
 
     @model_validator(mode="after")

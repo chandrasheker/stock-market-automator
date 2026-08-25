@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from crude_research.exceptions import AmbiguousFutureMappingError
+from crude_research.exceptions import AmbiguousFutureMappingError, UnknownOptionExpiryError
 from crude_research.market.contracts import resolve_underlying_future
 from tests.fixtures.builders import crude_master, instrument
 
@@ -76,3 +76,13 @@ def test_rejects_future_expiring_before_option() -> None:
     ]
     with pytest.raises(AmbiguousFutureMappingError):
         resolve_underlying_future(master, underlying="CRUDEOILM", option_expiry=date(2026, 10, 16))
+
+
+def test_unknown_expiry_lists_available() -> None:
+    master = crude_master()
+    with pytest.raises(UnknownOptionExpiryError) as exc:
+        resolve_underlying_future(master, underlying="CRUDEOILM", option_expiry=date(2026, 10, 14))
+    assert date(2026, 10, 16) in exc.value.available
+    assert "2026-10-16" in str(exc.value)
+    assert "Closest listed expiry: 2026-10-16" in str(exc.value)
+

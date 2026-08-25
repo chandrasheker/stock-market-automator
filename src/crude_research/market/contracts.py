@@ -17,7 +17,11 @@ import logging
 from collections.abc import Sequence
 from datetime import date
 
-from crude_research.exceptions import AmbiguousFutureMappingError, InstrumentMasterError
+from crude_research.exceptions import (
+    AmbiguousFutureMappingError,
+    InstrumentMasterError,
+    UnknownOptionExpiryError,
+)
 from crude_research.market.models import Instrument, Underlying
 
 log = logging.getLogger(__name__)
@@ -113,9 +117,17 @@ def resolve_underlying_future(
     options = list_options(master, target.value, option_expiry)
     futures = list_futures(master, target.value)
     if not options:
-        raise AmbiguousFutureMappingError(
-            f"No {target} options found for expiry {option_expiry.isoformat()}",
-            candidates=_candidate_dump(futures),
+        available = list_option_expiries(master, target.value)
+        available_txt = ", ".join(d.isoformat() for d in available) or "(none in master)"
+        closest = ""
+        if available:
+            nearest = min(available, key=lambda d: (abs((d - option_expiry).days), d))
+            closest = f" Closest listed expiry: {nearest.isoformat()}."
+        raise UnknownOptionExpiryError(
+            f"No {target} options found for expiry {option_expiry.isoformat()}. "
+            f"Available option expiries: {available_txt}.{closest} "
+            "Use one of those dates (MCX option last-trading-day is not the futures expiry date).",
+            available=available,
         )
 
     months = {opt.contract_month for opt in options}

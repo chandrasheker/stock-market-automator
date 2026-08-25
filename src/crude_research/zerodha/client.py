@@ -45,4 +45,11 @@ class KiteMarketDataClient:
 
     def profile(self) -> dict[str, Any]:
         """Authenticated connectivity check. Does not touch orders."""
-        return dict(self._kite.profile())
+        log.info("Kite profile() request (read-only; credentials not logged)")
+        try:
+            return dict(self._kite.profile())
+        except Exception as exc:
+            from crude_research.diagnostics.kite_auth import format_kite_exception
+
+            log.error("Kite profile() failed: %s", format_kite_exception(exc))
+            raise
