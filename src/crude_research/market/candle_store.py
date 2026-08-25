@@ -28,6 +28,7 @@ def bars_to_frame(bars: Sequence[Bar], *, symbol: str, interval: str) -> pd.Data
             "volume": bar.volume,
             "oi": bar.oi,
             "complete": bar.complete,
+            "notes": "|".join(bar.notes),
         }
         for bar in bars
     ]
@@ -44,6 +45,8 @@ def frame_to_bars(frame: pd.DataFrame) -> list[Bar]:
             start = start.replace(tzinfo=UTC)
         oi = row.oi
         oi_value = None if oi is None or pd.isna(oi) else _as_float(oi)
+        raw_notes = getattr(row, "notes", "") or ""
+        notes = tuple(part for part in str(raw_notes).split("|") if part)
         bars.append(
             Bar(
                 start=start,
@@ -54,6 +57,7 @@ def frame_to_bars(frame: pd.DataFrame) -> list[Bar]:
                 volume=_as_float(row.volume),
                 oi=oi_value,
                 complete=bool(row.complete),
+                notes=notes,
             )
         )
     return bars

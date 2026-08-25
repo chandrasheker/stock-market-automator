@@ -18,6 +18,16 @@ class DirectionPrediction:
     direction: int
     close: float
     atr: float
+    prediction_horizon: int = 5
+    prediction_timestamp: datetime | None = None
+
+    @property
+    def atr_at_prediction(self) -> float:
+        return self.atr
+
+    @property
+    def price_at_prediction(self) -> float:
+        return self.close
 
 
 @dataclass(frozen=True)
@@ -45,6 +55,7 @@ def evaluate_health(
     horizon: int,
     min_samples: int,
     deterioration: float,
+    min_recent_accuracy: float = 0.50,
     recent_window: int = 20,
     atr_band: float = 0.25,
 ) -> HealthReport:
@@ -55,11 +66,12 @@ def evaluate_health(
         idx = by_start.get(pred.bar_start)
         if idx is None:
             continue
-        later = idx + horizon
+        wait = pred.prediction_horizon if pred.prediction_horizon > 0 else horizon
+        later = idx + wait
         if later >= len(completed):
             continue
-        move = completed[later].close - pred.close
-        outcome = _outcome(move, pred.atr, atr_band)
+        move = completed[later].close - pred.price_at_prediction
+        outcome = _outcome(move, pred.atr_at_prediction, atr_band)
         if outcome == 0:
             continue
         hits.append(outcome == pred.direction)
@@ -72,7 +84,7 @@ def evaluate_health(
     status: HealthStatus
     if n < min_samples:
         status = "WARMING_UP"
-    elif recent < overall - deterioration:
+    elif recent < min_recent_accuracy or recent < overall - deterioration:
         status = "DEGRADED"
     else:
         status = "HEALTHY"

@@ -7,8 +7,16 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from crude_research.auth.kite_flow import (
+    KiteLoginGuard,
+    attach_nonce_cookie,
+    attach_operator_cookie,
+    clear_nonce_cookie,
+    operator_authenticated,
+    read_nonce,
+)
 from crude_research.auth.token import TokenStore, default_store, session_status
 from crude_research.config import Settings, get_settings
 from crude_research.diagnostics.kite_auth import format_kite_exception
@@ -25,6 +33,7 @@ def create_app(settings: Settings | None = None, store: TokenStore | None = None
     app = FastAPI(title="SMA", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.token_store = store
+    app.state.kite_login_guard = KiteLoginGuard()
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request) -> HTMLResponse:
@@ -42,12 +51,30 @@ def create_app(settings: Settings | None = None, store: TokenStore | None = None
         payload = session_status(request.app.state.settings)
         return JSONResponse(payload)
 
+    @app.post("/operator/login")
+    def operator_login(
+        request: Request,
+        token: str | None = Query(default=None),
+    ) -> Response:
+        settings = request.app.state.settings
+        if not settings.sma_operator_token or token != settings.sma_operator_token:
+            return _error_page("Operator login failed.")
+        response: Response = RedirectResponse("/", status_code=303)
+        attach_operator_cookie(response, request, settings)
+        return response
+
     @app.get("/auth/zerodha", response_model=None)
     def auth_zerodha(request: Request) -> HTMLResponse | RedirectResponse:
         settings = request.app.state.settings
         if not settings.kite_api_key:
             return _error_page("KITE_API_KEY is not configured on the server.")
-        return RedirectResponse(login_url(settings.kite_api_key), status_code=302)
+        if not operator_authenticated(request, settings):
+            return _error_page("Operator authentication is required before Zerodha login.")
+        guard: KiteLoginGuard = request.app.state.kite_login_guard
+        nonce = guard.issue(operator_bound=bool(settings.sma_operator_token))
+        response = RedirectResponse(login_url(settings.kite_api_key), status_code=302)
+        attach_nonce_cookie(response, nonce, request, settings)
+        return response
 
     @app.get("/auth/zerodha/callback", response_class=HTMLResponse)
     def auth_callback(
@@ -59,14 +86,30 @@ def create_app(settings: Settings | None = None, store: TokenStore | None = None
         del action
         settings: Settings = request.app.state.settings
         store: TokenStore = request.app.state.token_store
+        guard: KiteLoginGuard = request.app.state.kite_login_guard
+        nonce = read_nonce(request, settings)
+        pending = guard.consume(nonce) if nonce else None
+        failed = _error_page("This Zerodha callback is not bound to a pending SMA login.")
+        clear_nonce_cookie(failed)
+        if pending is None:
+            log.info("Kite callback rejected: missing or spent nonce")
+            return failed
+        if pending.operator_bound and not operator_authenticated(request, settings):
+            return failed
         if status is not None and status.lower() != "success":
             log.info("Kite callback status is not success")
-            return _error_page("Zerodha login was not completed.")
+            page = _error_page("Zerodha login was not completed.")
+            clear_nonce_cookie(page)
+            return page
         token = (request_token or "").strip()
         if not token:
-            return _error_page("Callback is missing request_token.")
+            page = _error_page("Callback is missing request_token.")
+            clear_nonce_cookie(page)
+            return page
         if not settings.kite_api_key or not settings.kite_api_secret:
-            return _error_page("Server is missing KITE_API_KEY or KITE_API_SECRET.")
+            page = _error_page("Server is missing KITE_API_KEY or KITE_API_SECRET.")
+            clear_nonce_cookie(page)
+            return page
         try:
             payload = exchange_request_token(
                 api_key=settings.kite_api_key,
@@ -78,14 +121,18 @@ def create_app(settings: Settings | None = None, store: TokenStore | None = None
             store.save(access_token)
         except Exception as exc:
             log.error("Kite callback failed: %s", format_kite_exception(exc))
-            return _error_page("Could not exchange or validate the Kite session.")
+            page = _error_page("Could not exchange or validate the Kite session.")
+            clear_nonce_cookie(page)
+            return page
         body = (
             "<h1>SMA</h1>"
             "<p>Zerodha authenticated successfully.</p>"
             "<p>SMA is ready for today's session.</p>"
             '<p><a href="/">Back</a></p>'
         )
-        return _page("SMA", body)
+        page = _page("SMA", body)
+        clear_nonce_cookie(page)
+        return page
 
     return app
 

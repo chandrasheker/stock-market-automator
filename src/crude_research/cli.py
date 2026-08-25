@@ -202,7 +202,12 @@ def format_bias_snapshot(
     lines = [
         f"Mapped future: {future_symbol}  (option expiry {option_expiry.isoformat()})",
         f"Bias: {snapshot.bias}  score={snapshot.score:+.0f}",
-        f"allow_entry: {snapshot.allow_entry}",
+        f"allow_entry: {snapshot.allow_entry}  allow_live_entry: {snapshot.allow_live_entry}",
+        (
+            f"session_close_rule: {snapshot.session_close_rule}"
+            if snapshot.session_close_rule
+            else "session_close_rule: —"
+        ),
         (
             "no_trade: "
             + (", ".join(snapshot.no_trade_reasons) if snapshot.no_trade_reasons else "—")

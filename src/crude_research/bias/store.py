@@ -35,12 +35,22 @@ def load_predictions(path: Path) -> list[DirectionPrediction]:
             continue
         if start.tzinfo is None:
             start = start.replace(tzinfo=IST)
+        close = _as_float(getattr(row, "price_at_prediction", None) or row.close)
+        atr = _as_float(getattr(row, "atr_at_prediction", None) or row.atr)
+        horizon = _as_int(getattr(row, "prediction_horizon", 5) or 5)
+        stamp = getattr(row, "prediction_timestamp", None)
+        if not isinstance(stamp, datetime):
+            stamp = start
+        elif stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=IST)
         out.append(
             DirectionPrediction(
                 bar_start=start,
                 direction=_as_int(row.direction),
-                close=_as_float(row.close),
-                atr=_as_float(row.atr),
+                close=close,
+                atr=atr,
+                prediction_horizon=horizon,
+                prediction_timestamp=stamp,
             )
         )
     return out
@@ -58,13 +68,27 @@ def persist_predictions(
             "direction": item.direction,
             "close": item.close,
             "atr": item.atr,
+            "price_at_prediction": item.price_at_prediction,
+            "atr_at_prediction": item.atr_at_prediction,
+            "prediction_timestamp": item.prediction_timestamp or item.bar_start,
+            "prediction_horizon": item.prediction_horizon,
             "stored_at_utc": datetime.now(tz=UTC),
         }
         for item in predictions
     ]
     frame = pd.DataFrame(
         rows,
-        columns=["bar_start", "direction", "close", "atr", "stored_at_utc"],
+        columns=[
+            "bar_start",
+            "direction",
+            "close",
+            "atr",
+            "price_at_prediction",
+            "atr_at_prediction",
+            "prediction_timestamp",
+            "prediction_horizon",
+            "stored_at_utc",
+        ],
     )
     frame.to_parquet(path, engine="pyarrow", index=False)
     return path

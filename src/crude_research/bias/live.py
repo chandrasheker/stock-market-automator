@@ -15,7 +15,7 @@ from crude_research.bias.engine import (
 )
 from crude_research.bias.store import load_predictions, persist_predictions, predictions_path
 from crude_research.config import Settings
-from crude_research.exceptions import QuoteRequestError
+from crude_research.exceptions import ConfigurationError, NoTrade, QuoteRequestError
 from crude_research.market.candle_store import persist_bars
 from crude_research.market.candles import (
     Bar,
@@ -99,7 +99,11 @@ def build_futures_bias(
     """Score direction from the mapped MCX future. Option premiums are not used."""
     tz = parse_timezone(settings.timezone)
     as_of = now or datetime.now(tz=tz)
-    session_close = settings.parsed_expiry_time()
+    try:
+        resolved = settings.resolve_session_close(as_of.astimezone(tz).date())
+    except ConfigurationError as exc:
+        raise NoTrade("SESSION_CLOSE_UNRESOLVED") from exc
+    session_close = resolved.clock
     token = future.instrument_token
     daily = fetch_interval_bars(
         client,
@@ -161,5 +165,6 @@ def build_futures_bias(
         h1=hourly,
         settings=settings,
         predictions=merged,
+        session_close_rule=resolved.rule,
     )
     return snapshot, written

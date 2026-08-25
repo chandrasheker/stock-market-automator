@@ -47,10 +47,12 @@ class BiasSnapshot(BaseModel):
     model_accuracy: float | None
     model_recent_accuracy: float | None
     allow_entry: bool
+    allow_live_entry: bool = False
     no_trade_reasons: tuple[str, ...] = ()
     daily_st: int = 0
     h4_st: int = 0
     h1_st: int = 0
+    session_close_rule: str | None = None
 
 
 def oi_confirmation(daily: Sequence[Bar]) -> str | None:
@@ -108,6 +110,7 @@ def evaluate_bias(
     h1: Sequence[Bar],
     settings: Settings,
     predictions: Sequence[DirectionPrediction] | None = None,
+    session_close_rule: str | None = None,
 ) -> BiasSnapshot:
     """Score direction from completed futures bars only. Incomplete 4H bars are ignored."""
     daily_c = completed_bars(daily)
@@ -246,6 +249,7 @@ def evaluate_bias(
         horizon=settings.prediction_horizon_4h,
         min_samples=settings.model_health_min_samples,
         deterioration=settings.model_health_deterioration,
+        min_recent_accuracy=settings.model_health_min_recent_accuracy,
     )
     no_trade: list[str] = []
     if vol == "EXTREME":
@@ -256,7 +260,11 @@ def evaluate_bias(
         no_trade.append("TIMEFRAMES_DISAGREE")
     if health.status == "DEGRADED":
         no_trade.append("MODEL_HEALTH_DEGRADED")
+    live_no_trade = list(no_trade)
+    if health.status == "WARMING_UP":
+        live_no_trade.append("MODEL_HEALTH_WARMING_UP")
     allow = len(no_trade) == 0 and bias in {"BULLISH", "BEARISH"}
+    allow_live = len(live_no_trade) == 0 and bias in {"BULLISH", "BEARISH"}
     return BiasSnapshot(
         score=score,
         bias=bias,
@@ -272,14 +280,22 @@ def evaluate_bias(
         model_accuracy=health.accuracy,
         model_recent_accuracy=health.recent_accuracy,
         allow_entry=allow,
+        allow_live_entry=allow_live,
         no_trade_reasons=tuple(no_trade),
         daily_st=daily_st,
         h4_st=h4_st,
         h1_st=h1_st,
+        session_close_rule=session_close_rule,
     )
 
 
-def prediction_from_snapshot(h4: Sequence[Bar], snapshot: BiasSnapshot) -> DirectionPrediction | None:
+def prediction_from_snapshot(
+    h4: Sequence[Bar],
+    snapshot: BiasSnapshot,
+    *,
+    horizon: int = 5,
+    now: datetime | None = None,
+) -> DirectionPrediction | None:
     done = completed_bars(h4)
     if not done or snapshot.atr is None or snapshot.atr <= 0:
         return None
@@ -290,6 +306,8 @@ def prediction_from_snapshot(h4: Sequence[Bar], snapshot: BiasSnapshot) -> Direc
         direction=1 if snapshot.bias == "BULLISH" else -1,
         close=done[-1].close,
         atr=snapshot.atr,
+        prediction_horizon=horizon,
+        prediction_timestamp=now or done[-1].start,
     )
 
 
@@ -319,7 +337,11 @@ def collect_predictions(
     session_close: time | None = None,
 ) -> list[DirectionPrediction]:
     """Causal walk: predict at completed 4H bar t using only bars up to t."""
-    close_at = session_close or settings.parsed_expiry_time()
+    if session_close is not None:
+        close_at = session_close
+    else:
+        hint = h4[-1].start if h4 else datetime.now(tz=IST)
+        close_at = settings.resolve_session_close(hint.astimezone(IST).date()).clock
     daily_c = completed_bars(daily)
     h4_c = completed_bars(h4)
     h1_c = completed_bars(h1)
@@ -340,7 +362,12 @@ def collect_predictions(
             settings=settings,
             predictions=(),
         )
-        pred = prediction_from_snapshot(h4_c[: i + 1], snapshot)
+        pred = prediction_from_snapshot(
+            h4_c[: i + 1],
+            snapshot,
+            horizon=settings.prediction_horizon_4h,
+            now=bar.start,
+        )
         if pred is not None:
             fresh.append(pred)
     merged, _added = merge_predictions(existing, fresh)

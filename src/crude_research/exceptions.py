@@ -56,4 +56,15 @@ class NoTrade(CrudeResearchError):
 
     def __init__(self, reason: str, *extra: str) -> None:
         self.reasons = (reason, *extra)
-        super().__init__(reason)
+        super().__init__(":".join(self.reasons))
+
+
+class LiveTradingDisabledError(CrudeResearchError):
+    """LIVE order placement is locked."""
+
+    def __init__(self, detail: str = "LIVE_DISARMED") -> None:
+        super().__init__(detail)
+
+
+class SafeHaltError(CrudeResearchError):
+    """Unknown broker state; new entries forbidden until operator review."""

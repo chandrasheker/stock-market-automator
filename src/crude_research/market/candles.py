@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
@@ -11,6 +12,10 @@ from zoneinfo import ZoneInfo
 from crude_research.quant.time import require_aware
 
 IST = ZoneInfo("Asia/Kolkata")
+log = logging.getLogger(__name__)
+
+INCOMPLETE_SOURCE_BARS = "INCOMPLETE_SOURCE_BARS"
+CONFLICTING_SOURCE_BARS = "CONFLICTING_SOURCE_BARS"
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,7 @@ class Bar:
     volume: float = 0.0
     oi: float | None = None
     complete: bool = True
+    notes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         require_aware(self.start, label="bar.start")
@@ -30,6 +36,11 @@ class Bar:
 
 def completed_bars(bars: Sequence[Bar]) -> list[Bar]:
     return [bar for bar in bars if bar.complete]
+
+
+def _hour_start(ts: datetime) -> datetime:
+    local = ts.astimezone(IST)
+    return datetime(local.year, local.month, local.day, local.hour, 0, tzinfo=IST)
 
 
 def _bucket_start(ts: datetime) -> datetime:
@@ -53,7 +64,7 @@ def _bucket_start(ts: datetime) -> datetime:
     return datetime(day.year, day.month, day.day, start_h, 0, tzinfo=IST)
 
 
-def session_4h_end(start: datetime, session_close: time = time(23, 30)) -> datetime:
+def session_4h_end(start: datetime, session_close: time) -> datetime:
     """Inclusive end of the IST 4H session bucket that begins at `start`."""
     return _bucket_end(start, session_close)
 
@@ -73,16 +84,58 @@ def _bucket_end(start: datetime, session_close: time) -> datetime:
     return local + timedelta(hours=4)
 
 
+def expected_60m_starts(bucket_start: datetime, session_close: time) -> list[datetime]:
+    """Hour-aligned 60m starts that must exist before a 4H bucket can be confirmed."""
+    local = bucket_start.astimezone(IST)
+    if local.hour == 21:
+        close_at = _bucket_end(local, session_close)
+        starts: list[datetime] = []
+        cursor = local
+        while cursor < close_at:
+            starts.append(cursor)
+            cursor += timedelta(hours=1)
+        return starts
+    return [local + timedelta(hours=offset) for offset in range(4)]
+
+
+def _same_ohlcv(left: Bar, right: Bar) -> bool:
+    return (
+        left.open == right.open
+        and left.high == right.high
+        and left.low == right.low
+        and left.close == right.close
+        and left.volume == right.volume
+        and left.oi == right.oi
+    )
+
+
+def _dedupe_hour_bars(members: Sequence[Bar]) -> tuple[dict[datetime, Bar], bool]:
+    by_hour: dict[datetime, Bar] = {}
+    conflict = False
+    for bar in members:
+        key = _hour_start(bar.start)
+        existing = by_hour.get(key)
+        if existing is None:
+            by_hour[key] = replace(bar, start=key)
+            continue
+        if not _same_ohlcv(existing, bar):
+            conflict = True
+        # Exact duplicates are ignored. Conflicts keep the first row and never sum volume.
+    return by_hour, conflict
+
+
 def aggregate_session_4h(
     bars_60m: Sequence[Bar],
     *,
     now: datetime,
-    session_close: time = time(23, 30),
+    session_close: time,
 ) -> list[Bar]:
     """Build IST session 4H candles from 60-minute bars.
 
     Buckets: 09:00–13:00, 13:00–17:00, 17:00–21:00, 21:00–session close.
-    A bucket is `complete` only when `now` is at or after its end.
+    A bucket is `complete` only when wall-clock has passed its end AND every
+    expected completed 60-minute source bar is present with no OHLC conflicts.
+    Missing hours are never interpolated.
     """
     require_aware(now, label="now")
     groups: dict[datetime, list[Bar]] = {}
@@ -90,20 +143,50 @@ def aggregate_session_4h(
         key = _bucket_start(bar.start)
         groups.setdefault(key, []).append(bar)
     out: list[Bar] = []
+    now_local = now.astimezone(IST)
     for start in sorted(groups):
-        members = sorted(groups[start], key=lambda item: item.start)
+        by_hour, conflict = _dedupe_hour_bars(groups[start])
+        expected = expected_60m_starts(start, session_close)
+        if not expected:
+            log.info("4H bucket %s skipped: empty expected 60m set", start.isoformat())
+            continue
+        usable = [by_hour[ts] for ts in expected if ts in by_hour]
+        if not usable:
+            log.info(
+                "4H bucket %s skipped: no expected 60m bars (%s)",
+                start.isoformat(),
+                INCOMPLETE_SOURCE_BARS,
+            )
+            continue
         end = _bucket_end(start, session_close)
-        complete = now.astimezone(IST) >= end
+        have_complete = {ts for ts in expected if ts in by_hour and by_hour[ts].complete}
+        notes: list[str] = []
+        complete = now_local >= end and have_complete == set(expected) and not conflict
+        if conflict:
+            notes.append(CONFLICTING_SOURCE_BARS)
+            complete = False
+        if have_complete != set(expected):
+            notes.append(INCOMPLETE_SOURCE_BARS)
+            complete = False
+        if not complete:
+            log.info(
+                "4H bucket %s complete=false reasons=%s expected=%s have=%s",
+                start.isoformat(),
+                ",".join(notes) or "WINDOW_OPEN",
+                [ts.strftime("%H:%M") for ts in expected],
+                [ts.strftime("%H:%M") for ts in sorted(have_complete)],
+            )
         out.append(
             Bar(
                 start=start,
-                open=members[0].open,
-                high=max(item.high for item in members),
-                low=min(item.low for item in members),
-                close=members[-1].close,
-                volume=sum(item.volume for item in members),
-                oi=members[-1].oi,
+                open=usable[0].open,
+                high=max(item.high for item in usable),
+                low=min(item.low for item in usable),
+                close=usable[-1].close,
+                volume=sum(item.volume for item in usable),
+                oi=usable[-1].oi,
                 complete=complete,
+                notes=tuple(notes),
             )
         )
     return out
@@ -114,14 +197,19 @@ def bar_is_complete(
     *,
     now: datetime,
     interval: Literal["day", "60minute"],
-    session_close: time = time(23, 30),
+    session_close: time,
 ) -> bool:
     local_now = now.astimezone(IST)
     local_start = start.astimezone(IST)
     if interval == "day":
         close_at = datetime.combine(local_start.date(), session_close, tzinfo=IST)
         return local_now >= close_at
-    return local_now >= local_start + timedelta(hours=1)
+    hour_end = local_start + timedelta(hours=1)
+    if local_start.hour >= 21:
+        close_at = datetime.combine(local_start.date(), session_close, tzinfo=IST)
+        if hour_end > close_at:
+            hour_end = close_at
+    return local_now >= hour_end
 
 
 def mark_in_progress_bars(
@@ -129,7 +217,7 @@ def mark_in_progress_bars(
     *,
     now: datetime,
     interval: Literal["day", "60minute"],
-    session_close: time = time(23, 30),
+    session_close: time,
 ) -> list[Bar]:
     """Mark Kite candles that have not finished as `complete=False`."""
     require_aware(now, label="now")

@@ -76,8 +76,10 @@ def test_pre_open_hour_joins_previous_late_bucket() -> None:
     )
     assert len(bars) == 1
     assert bars[0].start == datetime(2026, 8, 24, 21, 0, tzinfo=IST)
-    assert bars[0].complete is True
-    assert bars[0].close == 5010.0
+    assert bars[0].complete is False
+    assert "INCOMPLETE_SOURCE_BARS" in bars[0].notes
+    # 08:00 is outside the expected 21/22/23 set and must not become the close.
+    assert bars[0].close == 5000.0
 
 
 def test_open_daily_and_60m_bars_marked_incomplete() -> None:
@@ -94,6 +96,66 @@ def test_open_daily_and_60m_bars_marked_incomplete() -> None:
         hourly, now=now + timedelta(hours=1), interval="60minute", session_close=SESSION_CLOSE
     )
     assert later[0].complete is True
+
+
+def test_complete_4h_source_set_is_confirmed() -> None:
+    day = datetime(2026, 8, 25, tzinfo=IST)
+    hourly = [_h(day.replace(hour=h), 5000.0 + h) for h in (9, 10, 11, 12)]
+    now = datetime(2026, 8, 25, 13, 1, tzinfo=IST)
+    bars = aggregate_session_4h(hourly, now=now, session_close=SESSION_CLOSE)
+    assert len(bars) == 1
+    assert bars[0].complete is True
+    assert bars[0].notes == ()
+    assert bars[0].open == 5009
+    assert bars[0].close == 5012
+
+
+def test_missing_60m_bar_is_not_confirmed() -> None:
+    day = datetime(2026, 8, 25, tzinfo=IST)
+    hourly = [_h(day.replace(hour=h), 5000.0 + h) for h in (9, 10, 12)]
+    now = datetime(2026, 8, 25, 13, 1, tzinfo=IST)
+    bars = aggregate_session_4h(hourly, now=now, session_close=SESSION_CLOSE)
+    assert len(bars) == 1
+    assert bars[0].complete is False
+    assert "INCOMPLETE_SOURCE_BARS" in bars[0].notes
+    assert completed_bars(bars) == []
+
+
+def test_unfinished_latest_60m_bar_is_not_confirmed() -> None:
+    day = datetime(2026, 8, 25, tzinfo=IST)
+    hourly = [
+        _h(day.replace(hour=9), 5009.0),
+        _h(day.replace(hour=10), 5010.0),
+        _h(day.replace(hour=11), 5011.0),
+        _h(day.replace(hour=12), 5012.0, complete=False),
+    ]
+    now = datetime(2026, 8, 25, 13, 1, tzinfo=IST)
+    bars = aggregate_session_4h(hourly, now=now, session_close=SESSION_CLOSE)
+    assert bars[0].complete is False
+    assert "INCOMPLETE_SOURCE_BARS" in bars[0].notes
+
+
+def test_duplicate_source_bar_does_not_double_count_volume() -> None:
+    day = datetime(2026, 8, 25, tzinfo=IST)
+    hourly = [_h(day.replace(hour=h), 5000.0 + h) for h in (9, 10, 11, 12)]
+    dup = _h(day.replace(hour=10), 5010.0)
+    conflict = Bar(
+        start=day.replace(hour=10),
+        open=1,
+        high=99,
+        low=0,
+        close=50,
+        volume=9999,
+        complete=True,
+    )
+    now = datetime(2026, 8, 25, 13, 1, tzinfo=IST)
+    same = aggregate_session_4h([*hourly, dup], now=now, session_close=SESSION_CLOSE)
+    assert same[0].complete is True
+    assert same[0].volume == 40
+    bad = aggregate_session_4h([*hourly, conflict], now=now, session_close=SESSION_CLOSE)
+    assert bad[0].complete is False
+    assert "CONFLICTING_SOURCE_BARS" in bad[0].notes
+    assert bad[0].volume == 40
 
 
 def test_candle_parquet_roundtrip(tmp_path: Path) -> None:
