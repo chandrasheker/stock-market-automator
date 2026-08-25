@@ -14,10 +14,12 @@ from crude_research.config import Settings
 from crude_research.diagnostics.kite_auth import (
     describe_settings_load,
     format_kite_exception,
+    is_market_data_permission_error,
+    permission_exception_hints,
     token_exception_hints,
 )
 from crude_research.market.contracts import list_futures, list_option_expiries
-from crude_research.market.models import Underlying
+from crude_research.market.models import Instrument, Underlying
 from crude_research.zerodha.client import KiteMarketDataClient
 from crude_research.zerodha.instruments import (
     cache_path,
@@ -216,6 +218,43 @@ def run_doctor(settings: Settings, *, try_network: bool = True) -> DoctorReport:
             bool(exp_m),
             ",".join(d.isoformat() for d in exp_m) or "none",
         )
+        _probe_market_quote(report, client, records)
     except Exception as exc:
         report.add("mcx_instrument_master", False, f"{type(exc).__name__}: {exc}")
     return report
+
+
+def _probe_market_quote(
+    report: DoctorReport,
+    client: KiteMarketDataClient,
+    records: list[Instrument],
+) -> None:
+    """quote() is the actual market-data gate; profile() is not."""
+    futs = list_futures(records, "CRUDEOILM") or list_futures(records, "CRUDEOIL")
+    if not futs:
+        report.add("kite_quote", False, "no CRUDEOIL/CRUDEOILM future to probe")
+        return
+    inst = futs[0]
+    key = inst.kite_quote_key
+    log.info("Probing Kite quote() for %s (one instrument; credentials not logged)", key)
+    try:
+        payload = client.quote([key])
+    except Exception as exc:
+        detail = format_kite_exception(exc)
+        report.add("kite_quote", False, f"{key}: {detail}")
+        log.error("Kite quote() probe failed: %s", detail)
+        if is_market_data_permission_error(exc):
+            report.hints.extend(permission_exception_hints())
+        return
+    item: object
+    if key in payload:
+        item = payload[key]
+    elif payload:
+        item = next(iter(payload.values()))
+    else:
+        item = None
+    if not isinstance(item, dict):
+        report.add("kite_quote", False, f"{key}: empty quote payload")
+        return
+    last = item.get("last_price")
+    report.add("kite_quote", True, f"{key} last_price={last}")

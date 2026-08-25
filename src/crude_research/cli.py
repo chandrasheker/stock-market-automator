@@ -71,6 +71,20 @@ def _parse_expiry(value: str) -> date:
     return date.fromisoformat(value)
 
 
+def _echo_crude_error(exc: BaseException) -> None:
+    from crude_research.diagnostics.kite_auth import (
+        is_market_data_permission_error,
+        permission_exception_hints,
+    )
+
+    typer.echo(f"{type(exc).__name__}: {exc}", err=True)
+    if is_market_data_permission_error(exc):
+        typer.echo("", err=True)
+        typer.echo("How to fix PermissionException:", err=True)
+        for hint in permission_exception_hints():
+            typer.echo(f"  - {hint}", err=True)
+
+
 def _fmt(value: object, digits: int = 2) -> str:
     if value is None:
         return "—"
@@ -251,7 +265,12 @@ def doctor() -> None:
         typer.echo(f"[{mark}] {check.name}: {check.detail}")
     if report.hints:
         typer.echo("")
-        typer.echo("How to fix TokenException:")
+        header = "How to fix:"
+        if any("paid Kite Connect" in hint for hint in report.hints):
+            header = "How to fix PermissionException:"
+        elif any("access_token" in hint for hint in report.hints):
+            header = "How to fix TokenException:"
+        typer.echo(header)
         for hint in report.hints:
             typer.echo(f"  - {hint}")
     if not report.ok:
@@ -455,7 +474,7 @@ def chain_snapshot(
             persist=persist,
         )
     except CrudeResearchError as exc:
-        typer.echo(f"{type(exc).__name__}: {exc}", err=True)
+        _echo_crude_error(exc)
         raise typer.Exit(code=1) from exc
     typer.echo(format_chain_table(snapshot))
     if path:
@@ -475,9 +494,13 @@ def chain_watch(
     settings = _settings()
     tz = parse_timezone(settings.timezone)
     exp = _parse_expiry(expiry)
-    snapshot, _path = _build_live_chain(
-        settings, underlying=underlying, expiry=exp, rate=risk_free_rate, persist=False
-    )
+    try:
+        snapshot, _path = _build_live_chain(
+            settings, underlying=underlying, expiry=exp, rate=risk_free_rate, persist=False
+        )
+    except CrudeResearchError as exc:
+        _echo_crude_error(exc)
+        raise typer.Exit(code=1) from exc
     typer.echo(format_chain_table(snapshot))
     from crude_research.market.contracts import resolve_underlying_future
     from crude_research.zerodha.quotes import fetch_full_quotes as _fetch

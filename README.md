@@ -110,7 +110,7 @@ QUOTE_BATCH_SIZE=500          # Kite /quote limit; do not raise above 500
 STALE_QUOTE_SECONDS=120
 IV_VOL_LOWER=0.000001
 IV_VOL_UPPER=5.0              # 500% vol search cap
-OPTION_EXPIRY_TIME=23:30:00   # explicit assumption; see §15
+OPTION_EXPIRY_TIME=23:30:00   # explicit assumption; see §16
 ```
 
 ## 6. Instrument sync
@@ -171,7 +171,7 @@ P = e^{−rT} [ K N(−d2) − F N(−d1) ]
 ```
 
 `F` is the mapped futures research price (mid when valid; otherwise `LTP_FALLBACK`, never silently relabelled as mid).
-`T` is an exact timezone-aware year fraction (see §15). `r` is the configured continuously compounded rate stored on every greeks row.
+`T` is an exact timezone-aware year fraction (see §16). `r` is the configured continuously compounded rate stored on every greeks row.
 
 ### Greek units
 
@@ -258,7 +258,7 @@ python -m crude_research.cli --version
 python -m crude_research.cli --help
 ```
 
-You want **`crude-research 0.1.2`** (or newer) and `--help` listing `doctor`, `instruments`, `chain`, and **`kite`**. Then, **one command at a time**:
+You want **`crude-research 0.1.3`** (or newer) and `--help` listing `doctor`, `instruments`, `chain`, and **`kite`**. Then, **one command at a time**:
 
 ```bash
 python -m crude_research.cli kite set-secret
@@ -299,7 +299,34 @@ python -m crude_research.cli doctor
 
 Today's instrument cache can still be read when the token is dead (`instruments expiries` worked from Parquet). **Live quotes still need a valid daily token.**
 
-## 15. Known assumptions and limitations
+## 15. Troubleshooting: `PermissionException` / `Insufficient permission`
+
+`doctor` `kite_connectivity` only calls `profile()`. That succeeds on a **Kite Personal (free)** app. `instruments()` also works. **`quote()`, `ltp()`, and websocket market data do not.**
+
+This snapshot error:
+
+```text
+QuoteRequestError: ... PermissionException: Insufficient permission for that call. (code=403)
+```
+
+means the `api_key` in `.env` belongs to a Personal app (or an expired Connect subscription). Adding wallet credits does **not** convert a Personal app into Connect. Create a **new** app of type **Connect** on https://developers.kite.trade after adding credits, then:
+
+```bash
+# put the Connect app api_key / api_secret in .env
+python -m crude_research.cli kite set-secret
+python -m crude_research.cli kite login-url
+python -m crude_research.cli kite session --request-token <value-from-redirect>
+python -m crude_research.cli doctor
+# doctor must show kite_quote OK, not only kite_connectivity OK
+python -m crude_research.cli chain snapshot \
+  --underlying CRUDEOILM \
+  --expiry 2026-10-15 \
+  --risk-free-rate 0.065
+```
+
+This library will not invent bid/ask or LTP when Kite forbids quotes.
+
+## 16. Known assumptions and limitations
 
 ### Option-to-futures mapping
 

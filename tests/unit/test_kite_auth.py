@@ -39,6 +39,32 @@ def test_hints_flag_secret_copied_into_access_token() -> None:
     assert any("identical" in h for h in hints)
 
 
+def test_permission_hints_mention_connect_app() -> None:
+    from crude_research.diagnostics.kite_auth import (
+        is_market_data_permission_error,
+        permission_exception_hints,
+    )
+
+    class PermissionException(Exception):
+        pass
+
+    assert is_market_data_permission_error(PermissionException("Insufficient permission for that call."))
+    hints = permission_exception_hints()
+    assert any("Personal" in h and "quote()" in h for h in hints)
+    assert any("Connect" in h for h in hints)
+
+
+def test_wrapped_quote_error_counts_as_permission() -> None:
+    from crude_research.diagnostics.kite_auth import is_market_data_permission_error
+    from crude_research.exceptions import QuoteRequestError
+
+    exc = QuoteRequestError(
+        "Kite full-quote request failed for 355 instruments: "
+        "PermissionException: Insufficient permission for that call. (code=403)"
+    )
+    assert is_market_data_permission_error(exc)
+
+
 def test_login_url_contains_api_key() -> None:
     from crude_research.zerodha.session import login_url
 

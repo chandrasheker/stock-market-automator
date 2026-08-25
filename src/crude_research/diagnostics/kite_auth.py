@@ -102,6 +102,25 @@ def token_exception_hints(
     return hints
 
 
+def is_market_data_permission_error(exc: BaseException) -> bool:
+    if type(exc).__name__ == "PermissionException":
+        return True
+    text = str(exc)
+    return "PermissionException" in text or "Insufficient permission" in text
+
+
+def permission_exception_hints() -> list[str]:
+    return [
+        "profile() and instruments() work on a Kite Personal (free) app. quote(), ltp(), and websocket do not.",
+        "Live MCX quotes need a paid Kite Connect app. Adding credits does not convert an existing Personal app.",
+        "On https://developers.kite.trade add credits, create a new app of type Connect, put that api_key and api_secret in .env.",
+        "Then mint a new daily token for the Connect app: kite login-url, then kite session.",
+        "Confirm the current Connect price on the developer portal (it is billed per app).",
+        "This library does not invent prices when quote() is forbidden.",
+        "https://kite.trade/docs/connect/v3/",
+    ]
+
+
 def env_file_status(cwd: Path | None = None) -> str:
     here = cwd or Path.cwd()
     env_path = here / ".env"
