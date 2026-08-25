@@ -261,18 +261,61 @@ def doctor() -> None:
 @kite_app.command("login-url")
 def kite_login_url() -> None:
     """Print the official Kite Connect browser login URL. Does not open a browser."""
+    from crude_research.diagnostics.kite_auth import ensure_env_key
+
     settings = _settings()
     if not settings.kite_api_key:
         typer.echo("Set KITE_API_KEY in .env first.", err=True)
         raise typer.Exit(code=1)
+    env_path = Path.cwd() / ".env"
+    if env_path.is_file():
+        ensure_env_key(env_path, "KITE_API_SECRET")
+    if not settings.kite_api_secret:
+        typer.echo("KITE_API_SECRET is empty. git pull does not copy keys into .env.", err=True)
+        typer.echo("Set it before exchanging a request_token (tokens expire in minutes):", err=True)
+        typer.echo("  python -m crude_research.cli kite set-secret", err=True)
+        typer.echo(
+            "  or edit .env: KITE_API_SECRET=<api_secret from https://developers.kite.trade>",
+            err=True,
+        )
+        typer.echo("If KITE_ACCESS_TOKEN is the 32-char console secret, copy that value into KITE_API_SECRET.", err=True)
+        typer.echo("", err=True)
     from crude_research.zerodha.session import login_url
 
     url = login_url(settings.kite_api_key)
     typer.echo(url)
     typer.echo("")
+    typer.echo("Run the next commands one at a time (do not paste this whole block):")
     typer.echo("1. Open that URL, log in with Kite (password/PIN/TOTP in the browser).")
-    typer.echo("2. After redirect, copy request_token from the URL query string.")
-    typer.echo("3. python -m crude_research.cli kite session --request-token REQUEST_TOKEN")
+    typer.echo("2. After redirect, copy the value of request_token from the URL query string.")
+    typer.echo("3. python -m crude_research.cli kite session --request-token <that-value>")
+
+
+@kite_app.command("set-secret")
+def kite_set_secret() -> None:
+    """Write KITE_API_SECRET to .env from a hidden prompt. Never prints the value."""
+    from crude_research.config import clear_settings_cache
+    from crude_research.diagnostics.kite_auth import mask_secret, upsert_env_value
+
+    settings = _settings()
+    secret = typer.prompt(
+        "Paste api_secret from https://developers.kite.trade (input hidden)",
+        hide_input=True,
+    ).strip()
+    if not secret:
+        typer.echo("Empty secret; nothing written.", err=True)
+        raise typer.Exit(code=1)
+    env_path = Path.cwd() / ".env"
+    upsert_env_value(env_path, "KITE_API_SECRET", secret)
+    clear_settings_cache()
+    typer.echo(f"Wrote KITE_API_SECRET to {env_path} fingerprint={mask_secret(secret)}")
+    if settings.kite_access_token and secret == settings.kite_access_token:
+        typer.echo(
+            "That value matches KITE_ACCESS_TOKEN. If ACCESS_TOKEN was the console secret, "
+            "that mix-up is now fixed; kite session will replace ACCESS_TOKEN after login."
+        )
+    typer.echo("Next, one command at a time:")
+    typer.echo("  python -m crude_research.cli kite login-url")
 
 
 @kite_app.command("session")
@@ -282,24 +325,48 @@ def kite_session(
 ) -> None:
     """Exchange request_token + api_secret for today's access_token. No orders."""
     from crude_research.config import clear_settings_cache
-    from crude_research.diagnostics.kite_auth import mask_secret, upsert_env_value
+    from crude_research.diagnostics.kite_auth import (
+        is_placeholder_request_token,
+        mask_secret,
+        upsert_env_value,
+    )
     from crude_research.zerodha.session import exchange_request_token
 
     settings = _settings()
-    if not settings.kite_api_key:
-        typer.echo("KITE_API_KEY is missing.", err=True)
-        raise typer.Exit(code=1)
-    if not settings.kite_api_secret:
+    failed = False
+    if is_placeholder_request_token(request_token):
         typer.echo(
-            "KITE_API_SECRET is missing. Put the developers-console api_secret there "
-            "(not in KITE_ACCESS_TOKEN).",
+            f"{request_token!r} is a documentation placeholder, not a token from Kite.",
             err=True,
         )
+        typer.echo(
+            "Open kite login-url, finish login, then pass request_token from the redirect URL.",
+            err=True,
+        )
+        failed = True
+    if not settings.kite_api_key:
+        typer.echo("KITE_API_KEY is missing.", err=True)
+        failed = True
+    if not settings.kite_api_secret:
+        typer.echo("KITE_API_SECRET is missing. git pull does not copy keys into .env.", err=True)
+        typer.echo("  python -m crude_research.cli kite set-secret", err=True)
+        typer.echo(
+            "or add KITE_API_SECRET=<api_secret from https://developers.kite.trade> to .env (no quotes).",
+            err=True,
+        )
+        if settings.kite_access_token and len(settings.kite_access_token) == 32:
+            typer.echo(
+                "KITE_ACCESS_TOKEN is 32 chars — that is also the length of api_secret. "
+                "If that field is the console secret, copy it into KITE_API_SECRET.",
+                err=True,
+            )
+        failed = True
+    if failed:
         raise typer.Exit(code=1)
     try:
         payload = exchange_request_token(
-            api_key=settings.kite_api_key,
-            api_secret=settings.kite_api_secret,
+            api_key=settings.kite_api_key or "",
+            api_secret=settings.kite_api_secret or "",
             request_token=request_token.strip(),
         )
     except Exception as exc:

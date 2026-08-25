@@ -85,20 +85,24 @@ def test_exchange_request_token_does_not_log_secrets(monkeypatch, caplog) -> Non
     assert "daily_access_token_xx" not in joined
 
 
-def test_kite_login_url_cli(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_kite_login_url_cli(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from typer.testing import CliRunner
 
     from crude_research.cli import app
     from crude_research.config import Settings
 
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("KITE_API_KEY=testkey123\n", encoding="utf-8")
     monkeypatch.setattr(
         "crude_research.cli.get_settings",
-        lambda: Settings(kite_api_key="testkey123", _env_file=None),
+        lambda: Settings(kite_api_key="testkey123", kite_api_secret=None, _env_file=None),
     )
     result = CliRunner().invoke(app, ["kite", "login-url"])
     assert result.exit_code == 0
     assert "api_key=testkey123" in result.stdout
     assert "request-token" in result.stdout
+    assert "KITE_API_SECRET is empty" in result.output
+    assert "KITE_API_SECRET=" in (tmp_path / ".env").read_text(encoding="utf-8")
 
 
 def test_kite_session_writes_env_without_printing_token(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -130,3 +134,64 @@ def test_kite_session_writes_env_without_printing_token(tmp_path: Path, monkeypa
     text = env_path.read_text(encoding="utf-8")
     assert "KITE_ACCESS_TOKEN=fresh_daily_token_xx" in text
     assert "old" not in text
+
+
+def test_placeholder_request_token() -> None:
+    from crude_research.diagnostics.kite_auth import is_placeholder_request_token
+
+    assert is_placeholder_request_token("REQUEST_TOKEN")
+    assert is_placeholder_request_token("PASTE_TOKEN_HERE")
+    assert is_placeholder_request_token("  <token_from_redirect_url>  ")
+    assert not is_placeholder_request_token("abc123real")
+
+
+def test_ensure_env_key_appends_once(tmp_path: Path) -> None:
+    from crude_research.diagnostics.kite_auth import ensure_env_key
+
+    path = tmp_path / ".env"
+    path.write_text("KITE_API_KEY=abc\n", encoding="utf-8")
+    assert ensure_env_key(path, "KITE_API_SECRET") is True
+    assert ensure_env_key(path, "KITE_API_SECRET") is False
+    text = path.read_text(encoding="utf-8")
+    assert text.count("KITE_API_SECRET=") == 1
+
+
+def test_kite_session_rejects_placeholder_and_missing_secret(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from typer.testing import CliRunner
+
+    from crude_research.cli import app
+    from crude_research.config import Settings
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "crude_research.cli.get_settings",
+        lambda: Settings(
+            kite_api_key="k",
+            kite_api_secret=None,
+            kite_access_token="b" * 32,
+            _env_file=None,
+        ),
+    )
+    result = CliRunner().invoke(app, ["kite", "session", "--request-token", "PASTE_TOKEN_HERE"])
+    assert result.exit_code == 1
+    assert "placeholder" in result.output
+    assert "KITE_API_SECRET is missing" in result.output
+    assert "32 chars" in result.output
+
+
+def test_kite_set_secret_writes_env(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from typer.testing import CliRunner
+
+    from crude_research.cli import app
+    from crude_research.config import Settings
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("KITE_API_KEY=k\nKITE_ACCESS_TOKEN=old\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "crude_research.cli.get_settings",
+        lambda: Settings(kite_api_key="k", kite_access_token="old", _env_file=None),
+    )
+    result = CliRunner().invoke(app, ["kite", "set-secret"], input="console_secret_value\n")
+    assert result.exit_code == 0, result.output
+    assert "console_secret_value" not in result.output
+    assert "KITE_API_SECRET=console_secret_value" in (tmp_path / ".env").read_text(encoding="utf-8")

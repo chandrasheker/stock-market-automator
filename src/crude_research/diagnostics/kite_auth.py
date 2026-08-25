@@ -173,3 +173,39 @@ def upsert_env_value(path: Path, key: str, value: str) -> None:
             out.append("")
         out.append(f"{key}={value}")
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+_PLACEHOLDER_REQUEST_TOKENS = frozenset(
+    {
+        "REQUEST_TOKEN",
+        "PASTE_TOKEN_HERE",
+        "PASTE_THE_REDIRECT_TOKEN",
+        "TOKEN_FROM_REDIRECT_URL",
+        "<TOKEN_FROM_REDIRECT_URL>",
+        "<TOKEN_FROM_REDIRECT>",
+    }
+)
+
+
+def is_placeholder_request_token(value: str) -> bool:
+    """True when the user pasted a docs placeholder instead of the redirect token."""
+    text = value.strip()
+    if not text:
+        return True
+    compact = text.upper().replace("-", "_")
+    return compact in _PLACEHOLDER_REQUEST_TOKENS or compact.strip("<>") in _PLACEHOLDER_REQUEST_TOKENS
+
+
+def env_has_key(path: Path, key: str) -> bool:
+    if not path.is_file():
+        return False
+    prefix = f"{key}="
+    return any(line.strip().startswith(prefix) for line in path.read_text(encoding="utf-8").splitlines())
+
+
+def ensure_env_key(path: Path, key: str) -> bool:
+    """Append `key=` when missing. Returns True if a line was added."""
+    if env_has_key(path, key):
+        return False
+    upsert_env_value(path, key, "")
+    return True

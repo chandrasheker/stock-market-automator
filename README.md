@@ -85,12 +85,15 @@ TIMEZONE=Asia/Kolkata
 RISK_FREE_RATE=
 ```
 
-This project **does not** automate Kite login (no password, PIN, TOTP, or browser automation). `KITE_API_SECRET` is only used to exchange a one-time `request_token` for today's `access_token`:
+This project **does not** automate Kite login (no password, PIN, TOTP, or browser automation). `KITE_API_SECRET` is only used to exchange a one-time `request_token` for today's `access_token`. **`git pull` does not update `.env`.** If that file was created before `KITE_API_SECRET` existed, the line is missing until you add it.
+
+Run these **one command at a time** (do not paste the whole block):
 
 ```bash
+python -m crude_research.cli kite set-secret
 python -m crude_research.cli kite login-url
 # open the printed URL, log in in the browser, copy request_token from the redirect
-python -m crude_research.cli kite session --request-token REQUEST_TOKEN
+python -m crude_research.cli kite session --request-token <value-from-redirect>
 python -m crude_research.cli doctor
 ```
 
@@ -255,13 +258,13 @@ python -m crude_research.cli --version
 python -m crude_research.cli --help
 ```
 
-You want **`crude-research 0.1.1`** (or newer) and `--help` listing `doctor`, `instruments`, `chain`, and **`kite`**. Then:
+You want **`crude-research 0.1.2`** (or newer) and `--help` listing `doctor`, `instruments`, `chain`, and **`kite`**. Then, **one command at a time**:
 
 ```bash
+python -m crude_research.cli kite set-secret
 python -m crude_research.cli kite login-url
 # log in in the browser; copy the real request_token from the redirect URL
-# (not the literal placeholder REQUEST_TOKEN)
-python -m crude_research.cli kite session --request-token PASTE_TOKEN_HERE
+python -m crude_research.cli kite session --request-token <value-from-redirect>
 python -m crude_research.cli doctor
 ```
 
@@ -285,9 +288,10 @@ Fix:
 3. Create today's access_token (no password automation in this repo):
 
 ```bash
+python -m crude_research.cli kite set-secret
 python -m crude_research.cli kite login-url
 # open the printed URL, log in in the browser, copy request_token from the redirect
-python -m crude_research.cli kite session --request-token REQUEST_TOKEN
+python -m crude_research.cli kite session --request-token <value-from-redirect>
 python -m crude_research.cli doctor
 ```
 
