@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     websocket_reconnect_max_delay: int = Field(default=60, ge=1)
     log_level: str = "INFO"
 
+    live_trading_enabled: bool = False
+
+    bias_bullish_threshold: float = 60.0
+    bias_bearish_threshold: float = -60.0
+    model_health_min_samples: int = 20
+    model_health_deterioration: float = 0.20
+    prediction_horizon_4h: int = 5
+    atr_period: int = 14
+    atr_percentile_lookback: int = 100
+    atr_extreme_percentile: float = 95.0
+    atr_extreme_zscore: float = 2.5
+    atr_extreme_range_mult: float = 2.5
+
     @field_validator(
         "kite_api_key",
         "kite_access_token",

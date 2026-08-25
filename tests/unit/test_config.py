@@ -16,6 +16,8 @@ def test_missing_credentials_still_construct(monkeypatch) -> None:  # type: igno
     assert settings.risk_free_rate is None
     assert settings.quote_batch_size == 500
     assert settings.timezone == "Asia/Kolkata"
+    assert settings.live_trading_enabled is False
+    assert settings.bias_bullish_threshold == 60.0
 
 
 def test_empty_rate_is_none(monkeypatch) -> None:  # type: ignore[no-untyped-def]

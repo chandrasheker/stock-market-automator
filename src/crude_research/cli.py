@@ -11,6 +11,8 @@ from typing import Annotated
 import typer
 
 from crude_research import __version__
+from crude_research.bias.engine import BiasSnapshot
+from crude_research.bias.live import build_futures_bias
 from crude_research.config import Settings, get_settings
 from crude_research.diagnostics.doctor import run_doctor
 from crude_research.exceptions import CrudeResearchError
@@ -31,8 +33,10 @@ app = typer.Typer(
 )
 instruments_app = typer.Typer(no_args_is_help=True, help="Instrument master commands.")
 chain_app = typer.Typer(no_args_is_help=True, help="Option-chain research commands.")
+bias_app = typer.Typer(no_args_is_help=True, help="Mapped-futures bias / volatility / model-health.")
 app.add_typer(instruments_app, name="instruments")
 app.add_typer(chain_app, name="chain")
+app.add_typer(bias_app, name="bias")
 kite_app = typer.Typer(no_args_is_help=True, help="Kite session helpers (no order placement).")
 app.add_typer(kite_app, name="kite")
 
@@ -185,6 +189,42 @@ def format_chain_table(snapshot: OptionChainSnapshot) -> str:
     lines.append(f"Valid IV calculations (status=OK, mid, not stale): {valid_iv}")
     if snapshot.notes:
         lines.append("Notes: " + "; ".join(snapshot.notes))
+    return "\n".join(lines)
+
+
+def format_bias_snapshot(
+    snapshot: BiasSnapshot,
+    *,
+    future_symbol: str,
+    option_expiry: date,
+) -> str:
+    """Compact diagnostic dump. Not a trading recommendation."""
+    lines = [
+        f"Mapped future: {future_symbol}  (option expiry {option_expiry.isoformat()})",
+        f"Bias: {snapshot.bias}  score={snapshot.score:+.0f}",
+        f"allow_entry: {snapshot.allow_entry}",
+        (
+            "no_trade: "
+            + (", ".join(snapshot.no_trade_reasons) if snapshot.no_trade_reasons else "—")
+        ),
+        (
+            f"volatility: {snapshot.volatility}  ATR={_fmt(snapshot.atr)}  "
+            f"pct={_fmt(snapshot.atr_percentile, 1)}  z={_fmt(snapshot.atr_zscore, 2)}  "
+            f"range/ATR={_fmt(snapshot.range_atr, 2)}  ROC={_fmt(snapshot.atr_roc, 3)}"
+        ),
+        (
+            f"model_health: {snapshot.model_health}  samples={snapshot.model_sample_count}  "
+            f"accuracy={_fmt(snapshot.model_accuracy, 3)}  "
+            f"recent={_fmt(snapshot.model_recent_accuracy, 3)}"
+        ),
+        f"supertrend daily/4H/1H: {snapshot.daily_st:+d}/{snapshot.h4_st:+d}/{snapshot.h1_st:+d}",
+        "reasons:",
+    ]
+    if snapshot.reasons:
+        lines.extend(f"  - {code}" for code in snapshot.reasons)
+    else:
+        lines.append("  - (none)")
+    lines.append("This is diagnostic/research output, not a trading recommendation.")
     return "\n".join(lines)
 
 
@@ -490,6 +530,34 @@ def instruments_expiries(underlying: str) -> None:
     for exp in list_option_expiries(records, underlying):
         n = len(list_options(records, underlying, exp))
         typer.echo(f"  {exp.isoformat()}  options={n}")
+
+
+@bias_app.command("show")
+def bias_show(
+    underlying: Annotated[str, typer.Option("--underlying", help="CRUDEOIL or CRUDEOILM")],
+    expiry: Annotated[str, typer.Option("--expiry", help="Option expiry YYYY-MM-DD")],
+    persist: Annotated[bool, typer.Option("--persist/--no-persist")] = True,
+) -> None:
+    """Score mapped-futures bias, volatility regime, and model health. No orders."""
+    settings = _settings()
+    exp = _parse_expiry(expiry)
+    try:
+        master = _load_master(settings)
+        from crude_research.auth.token import require_access_token
+        from crude_research.market.contracts import resolve_underlying_future
+
+        require_access_token(settings)
+        future = resolve_underlying_future(master, underlying=underlying, option_expiry=exp)
+        client = KiteMarketDataClient(settings)
+        snapshot, written = build_futures_bias(client, future, settings, persist=persist)
+    except CrudeResearchError as exc:
+        _echo_crude_error(exc)
+        raise typer.Exit(code=1) from exc
+    typer.echo(format_bias_snapshot(snapshot, future_symbol=future.tradingsymbol, option_expiry=exp))
+    if written:
+        typer.echo("")
+        for label, path in written.items():
+            typer.echo(f"Persisted {label}: {path}")
 
 
 @chain_app.command("snapshot")

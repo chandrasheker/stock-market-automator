@@ -11,22 +11,24 @@ Build a trustworthy quantitative foundation:
 1. Download and classify the MCX instrument master without mixing CRUDEOIL and CRUDEOILM.
 2. Reconstruct option chains against the **mapped underlying futures** contract (options on futures, not spot).
 3. Compute **Black-76** implied volatility and greeks from quality-tagged quotes.
+4. Score **mapped-futures** directional bias, volatility regime, and model health (M4). Option premiums are not used for direction.
 
-Later milestones (bias engine, scoring, backtests, paper/live trading, GTT) are **out of scope** until explicitly approved.
+Later milestones (strike scoring, backtests, paper/live trading, GTT) are **out of scope** until explicitly approved.
 
-## 2. Implemented scope (M1–M3 only)
+## 2. Implemented scope (M1–M4)
 
 | Milestone | What you get |
 |-----------|----------------|
 | **M1** | Kite credentials via env, daily MCX instrument cache (Parquet), contract discovery, option→future resolver, full-quote ingestion, KiteTicker FULL-mode interface, quote-quality flags |
 | **M2** | Option-chain snapshot, ATM from the mapped future, ATM straddle with explicit price source, distance / distance-to-straddle research fields, append-only Parquet |
 | **M3** | Black-76 pricing, exact timezone-aware year fraction, bounded Brent IV, delta/gamma/theta/vega with documented units |
+| **M4** | Futures-only bias engine (Daily + 4H primary, 1H confirmation), IST session 4H aggregation, ATR volatility regime, causal model-health after 5 completed 4H bars |
 
 ## 3. Intentionally NOT implemented
 
 There is no implementation of:
 
-* trading strategy / directional bias / strike scoring
+* option-strike scoring / candidate selection / hedges
 * backtesting
 * paper trading or live trading
 * `place_order` / modify / cancel
@@ -167,6 +169,23 @@ Watch (FULL-mode websocket; illiquid strikes may not tick):
 python -m crude_research.cli chain watch --underlying CRUDEOILM --expiry 2026-10-15
 ```
 
+## 7b. Futures bias snapshot (M4)
+
+Direction is read from the **mapped MCX future** for that option expiry, never from option premiums. Daily and 4H are primary; 1H is confirmation only. If Kite only provides 60-minute candles, 4H bars are built on IST session buckets `09:00–13:00`, `13:00–17:00`, `17:00–21:00`, `21:00–session close`. An unfinished 4H bucket is never used for a confirmed decision.
+
+```bash
+python -m crude_research.cli bias show --underlying CRUDEOILM --expiry 2026-10-15
+```
+
+Score is `-100..+100`. `>= +60` is BULLISH, `<= -60` is BEARISH, otherwise NEUTRAL. Volatility is classified separately from ATR(14), percentile, z-score, and range/ATR. **EXTREME volatility is always no-trade**, even when bias is BULLISH. Model-health stores a directional prediction at completed 4H bar `t` and scores it only after **5 further completed 4H bars** against a `±0.25 ATR` band. Past predictions are append-only Parquet and are never rewritten.
+
+```text
+data/candles/symbol=CRUDEOILM26OCTFUT/interval=day/bars_*.parquet
+data/bias/symbol=CRUDEOILM26OCTFUT/predictions.parquet
+```
+
+This output is diagnostic, not a trading recommendation. `LIVE_TRADING_ENABLED` stays `false`.
+
 ## 8. Black-76 model
 
 MCX crude options are **options on futures**. Prices are Black (1976), not equity Black–Scholes:
@@ -267,7 +286,7 @@ python -m crude_research.cli --version
 python -m crude_research.cli --help
 ```
 
-You want **`crude-research 0.1.3`** (or newer) and `--help` listing `doctor`, `instruments`, `chain`, and **`kite`**. Then, **one command at a time**:
+You want **`crude-research 0.1.5`** (or newer) and `--help` listing `doctor`, `instruments`, `chain`, `kite`, `serve`, and **`bias`**. Then, **one command at a time**:
 
 ```bash
 python -m crude_research.cli kite set-secret

@@ -19,6 +19,16 @@ class MarketDataBroker(Protocol):
 
     def profile(self) -> dict[str, Any]: ...
 
+    def historical_data(
+        self,
+        instrument_token: int,
+        from_dt: object,
+        to_dt: object,
+        interval: str,
+        *,
+        oi: bool = True,
+    ) -> list[dict[str, Any]]: ...
+
 
 def _raise_if_expired_token(exc: BaseException) -> None:
     name = type(exc).__name__
@@ -72,3 +82,27 @@ class KiteMarketDataClient:
             log.error("Kite profile() failed: %s", format_kite_exception(exc))
             _raise_if_expired_token(exc)
             raise
+
+    def historical_data(
+        self,
+        instrument_token: int,
+        from_dt: object,
+        to_dt: object,
+        interval: str,
+        *,
+        oi: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Read-only Kite historical candles. Never places orders."""
+        log.info("historical_data token=%s interval=%s", instrument_token, interval)
+        try:
+            payload = self._kite.historical_data(
+                instrument_token,
+                from_dt,
+                to_dt,
+                interval,
+                oi=oi,
+            )
+        except Exception as exc:
+            _raise_if_expired_token(exc)
+            raise
+        return list(payload)

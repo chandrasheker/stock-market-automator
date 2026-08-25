@@ -49,3 +49,11 @@ class QuoteRequestError(CrudeResearchError):
 
 class ConfigurationError(CrudeResearchError):
     """Invalid configuration that must be fixed before continuing."""
+
+
+class NoTrade(CrudeResearchError):
+    """Fail-closed decision: do not enter a new position."""
+
+    def __init__(self, reason: str, *extra: str) -> None:
+        self.reasons = (reason, *extra)
+        super().__init__(reason)

@@ -1,4 +1,4 @@
-"""Guardrail: M1–M3 must not grow order / GTT / strategy code."""
+"""Guardrail: research code must not grow order / GTT methods."""
 
 from __future__ import annotations
 

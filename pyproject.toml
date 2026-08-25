@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crude-research"
-version = "0.1.4"
-description = "MCX CRUDEOIL / CRUDEOILM market-data and Black-76 research foundation (Zerodha Kite Connect)."
+version = "0.1.5"
+description = "MCX CRUDEOIL / CRUDEOILM market-data, Black-76, and futures-bias research (Zerodha Kite Connect)."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
