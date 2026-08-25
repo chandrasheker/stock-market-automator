@@ -77,6 +77,4 @@ def scale_allowed(
         return False
     if cost_ratio > settings.scale_max_cost_ratio:
         return False
-    if max_dd > settings.weekly_drawdown_pct:
-        return False
-    return True
+    return max_dd <= settings.weekly_drawdown_pct

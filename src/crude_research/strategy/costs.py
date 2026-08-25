@@ -51,6 +51,7 @@ def economics_ok(estimate: CostEstimate, settings: Settings) -> bool:
         return False
     if estimate.cost_ratio > settings.cost_ratio_max:
         return False
-    if estimate.profit_to_cost is None or estimate.profit_to_cost < settings.profit_to_cost_min:
-        return False
-    return True
+    return (
+        estimate.profit_to_cost is not None
+        and estimate.profit_to_cost >= settings.profit_to_cost_min
+    )

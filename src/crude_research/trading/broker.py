@@ -218,8 +218,9 @@ class ZerodhaBroker:
         if kite is not None:
             self._kite = kite
         else:
-            from crude_research.auth.token import require_access_token
             from kiteconnect import KiteConnect
+
+            from crude_research.auth.token import require_access_token
 
             if not settings.kite_api_key:
                 raise LiveTradingDisabledError("KITE_API_KEY missing")

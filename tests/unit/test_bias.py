@@ -283,7 +283,11 @@ def test_health_insufficient_samples_is_warming_up() -> None:
 
 
 def test_warming_up_blocks_live_entry_not_paper() -> None:
-    settings = _settings()
+    settings = _settings(
+        atr_extreme_percentile=101.0,
+        atr_extreme_zscore=100.0,
+        atr_extreme_range_mult=100.0,
+    )
     day0 = datetime(2026, 1, 2, tzinfo=IST)
     snap = evaluate_bias(
         daily=_daily_trend(80, day0),
@@ -295,8 +299,8 @@ def test_warming_up_blocks_live_entry_not_paper() -> None:
     assert snap.model_health == "WARMING_UP"
     assert snap.allow_live_entry is False
     assert "MODEL_HEALTH_WARMING_UP" not in snap.no_trade_reasons
-    if snap.bias in {"BULLISH", "BEARISH"}:
-        assert snap.allow_entry is True
+    assert snap.bias in {"BULLISH", "BEARISH"}
+    assert snap.allow_entry is True
     chain = OptionChainSnapshot(
         underlying=Underlying.CRUDEOILM,
         option_expiry=date(2026, 10, 15),
