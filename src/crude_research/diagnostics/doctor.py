@@ -147,6 +147,14 @@ def run_doctor(settings: Settings, *, try_network: bool = True) -> DoctorReport:
         True,
         "present" if creds else "missing (offline/unit tests still work)",
     )
+    from crude_research.auth.token import has_current_access_token, session_status
+
+    session = session_status(settings)
+    report.add(
+        "kite_session",
+        bool(session["authenticated"]),
+        "authenticated today" if session["authenticated"] else "AUTHENTICATION_REQUIRED",
+    )
     for line in describe_settings_load(settings):
         report.add("kite_debug", True, line)
         log.info("doctor %s", line)
@@ -164,8 +172,9 @@ def run_doctor(settings: Settings, *, try_network: bool = True) -> DoctorReport:
         f"{settings.option_expiry_time} {settings.timezone} (CONFIGURED_ASSUMPTION until official specs are wired)",
     )
 
-    if not try_network or not creds:
-        report.add("kite_connectivity", not try_network or not creds, "skipped")
+    live = has_current_access_token(settings)
+    if not try_network or not live:
+        report.add("kite_connectivity", not try_network or not live, "skipped")
         _inspect_cached_master(report, settings, required=False)
         return report
 
@@ -179,7 +188,11 @@ def run_doctor(settings: Settings, *, try_network: bool = True) -> DoctorReport:
         detail = format_kite_exception(exc)
         report.add("kite_connectivity", False, detail)
         log.error("Kite connectivity failed: %s", detail)
-        if type(exc).__name__ == "TokenException" or "token" in str(exc).lower():
+        if (
+            type(exc).__name__ == "TokenException"
+            or type(exc).__name__ == "AuthenticationRequiredError"
+            or "token" in str(exc).lower()
+        ):
             report.hints.extend(
                 token_exception_hints(
                     settings.kite_api_key,

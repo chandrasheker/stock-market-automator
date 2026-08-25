@@ -14,6 +14,15 @@ class CredentialsMissingError(CrudeResearchError):
     """Kite API key or access token is not configured."""
 
 
+class AuthenticationRequiredError(CrudeResearchError):
+    """Market-data call blocked: no current Kite session for today."""
+
+    code = "AUTHENTICATION_REQUIRED"
+
+    def __init__(self, detail: str = "Kite session is missing or expired") -> None:
+        super().__init__(f"AUTHENTICATION_REQUIRED: {detail}")
+
+
 class InstrumentMasterError(CrudeResearchError):
     """Instrument master missing, unreadable, or malformed."""
 

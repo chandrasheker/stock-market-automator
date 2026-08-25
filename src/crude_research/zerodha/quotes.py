@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from crude_research.exceptions import QuoteRequestError
+from crude_research.exceptions import AuthenticationRequiredError, QuoteRequestError
 from crude_research.market.models import DepthLevel, MarketDepth, Quote
 from crude_research.quant.time import attach_timezone
 from crude_research.zerodha.client import MarketDataBroker
@@ -189,6 +189,8 @@ def fetch_full_quotes(
         log.info("Requesting full quotes batch_size=%s", len(batch))
         try:
             payload = broker.quote(batch)
+        except AuthenticationRequiredError:
+            raise
         except Exception as exc:
             from crude_research.diagnostics.kite_auth import format_kite_exception
 

@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Protocol
 
+from crude_research.auth.token import require_access_token
 from crude_research.config import Settings
-from crude_research.exceptions import CredentialsMissingError
+from crude_research.exceptions import AuthenticationRequiredError, CredentialsMissingError
 
 log = logging.getLogger(__name__)
 
@@ -19,11 +20,20 @@ class MarketDataBroker(Protocol):
     def profile(self) -> dict[str, Any]: ...
 
 
+def _raise_if_expired_token(exc: BaseException) -> None:
+    name = type(exc).__name__
+    if name == "TokenException" or "Incorrect `api_key` or `access_token`" in str(exc):
+        raise AuthenticationRequiredError("Kite rejected the access token") from exc
+
+
 class KiteMarketDataClient:
     """Thin authenticated client exposing only market-data endpoints."""
 
     def __init__(self, settings: Settings) -> None:
-        api_key, access_token = settings.require_kite_credentials()
+        api_key = settings.kite_api_key
+        if not api_key:
+            raise AuthenticationRequiredError("KITE_API_KEY is missing")
+        access_token = require_access_token(settings)
         try:
             from kiteconnect import KiteConnect
         except ImportError as exc:  # pragma: no cover
@@ -35,13 +45,21 @@ class KiteMarketDataClient:
 
     def instruments(self, exchange: str | None = None) -> list[dict[str, Any]]:
         log.info("Downloading instrument master exchange=%s", exchange or "ALL")
-        payload = self._kite.instruments(exchange=exchange) if exchange else self._kite.instruments()
+        try:
+            payload = self._kite.instruments(exchange=exchange) if exchange else self._kite.instruments()
+        except Exception as exc:
+            _raise_if_expired_token(exc)
+            raise
         return list(payload)
 
     def quote(self, instruments: list[str]) -> dict[str, Any]:
         if not instruments:
             return {}
-        return dict(self._kite.quote(instruments))
+        try:
+            return dict(self._kite.quote(instruments))
+        except Exception as exc:
+            _raise_if_expired_token(exc)
+            raise
 
     def profile(self) -> dict[str, Any]:
         """Authenticated connectivity check. Does not touch orders."""
@@ -52,4 +70,5 @@ class KiteMarketDataClient:
             from crude_research.diagnostics.kite_auth import format_kite_exception
 
             log.error("Kite profile() failed: %s", format_kite_exception(exc))
+            _raise_if_expired_token(exc)
             raise

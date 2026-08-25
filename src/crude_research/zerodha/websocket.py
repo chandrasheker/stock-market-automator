@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from crude_research.config import Settings
-from crude_research.exceptions import CredentialsMissingError
+from crude_research.exceptions import AuthenticationRequiredError, CredentialsMissingError
 from crude_research.market.models import Quote
 from crude_research.zerodha.quotes import normalize_tick
 
@@ -35,7 +35,12 @@ class MarketDataStream:
         tradingsymbol_by_token: dict[int, str],
         on_quote: TickHandler | None = None,
     ) -> None:
-        api_key, access_token = settings.require_kite_credentials()
+        api_key = settings.kite_api_key
+        if not api_key:
+            raise AuthenticationRequiredError("KITE_API_KEY is missing")
+        from crude_research.auth.token import require_access_token
+
+        access_token = require_access_token(settings)
         try:
             from kiteconnect import KiteTicker
         except ImportError as exc:  # pragma: no cover

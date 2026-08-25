@@ -78,6 +78,11 @@ def _echo_crude_error(exc: BaseException) -> None:
     )
 
     typer.echo(f"{type(exc).__name__}: {exc}", err=True)
+    from crude_research.exceptions import AuthenticationRequiredError
+
+    if isinstance(exc, AuthenticationRequiredError):
+        typer.echo("Authenticate for today's session: python -m crude_research.cli kite login-url", err=True)
+        return
     if is_market_data_permission_error(exc):
         typer.echo("", err=True)
         typer.echo("How to fix PermissionException:", err=True)
@@ -184,7 +189,9 @@ def format_chain_table(snapshot: OptionChainSnapshot) -> str:
 
 
 def _load_master(settings: Settings, *, force: bool = False) -> list[Instrument]:
-    broker = KiteMarketDataClient(settings) if settings.has_kite_credentials() else None
+    from crude_research.auth.token import has_current_access_token
+
+    broker = KiteMarketDataClient(settings) if has_current_access_token(settings) else None
     return load_or_sync_instruments(
         data_dir=settings.data_dir,
         timezone_name=settings.timezone,
@@ -211,8 +218,9 @@ def _build_live_chain(
     wanted = [future, *options]
     keys = [inst.kite_quote_key for inst in wanted]
     symbols = {inst.kite_quote_key: inst.tradingsymbol for inst in wanted}
-    if not settings.has_kite_credentials():
-        raise CrudeResearchError("KITE_API_KEY and KITE_ACCESS_TOKEN are required to snapshot live quotes.")
+    from crude_research.auth.token import require_access_token
+
+    require_access_token(settings)
     client = KiteMarketDataClient(settings)
     quotes = fetch_full_quotes(
         client,
@@ -397,6 +405,9 @@ def kite_session(
     user_id = payload.get("user_id")
     typer.echo(f"user_id: {user_id}")
     typer.echo(f"access_token fingerprint: {mask_secret(access_token)}")
+    from crude_research.auth.token import default_store
+
+    default_store(settings).save(access_token)
     if write_env:
         env_path = Path.cwd() / ".env"
         upsert_env_value(env_path, "KITE_ACCESS_TOKEN", access_token)
@@ -404,7 +415,7 @@ def kite_session(
         typer.echo(f"Wrote KITE_ACCESS_TOKEN to {env_path} (file is gitignored).")
         typer.echo("Re-run: python -m crude_research.cli doctor")
     else:
-        typer.echo("Paste the access_token into .env yourself (not printed here).")
+        typer.echo("Session stored for today's SMA process (token not printed).")
 
 
 @instruments_app.command("sync")
@@ -413,8 +424,10 @@ def instruments_sync(
 ) -> None:
     """Download the MCX instrument master and cache it as Parquet."""
     settings = _settings()
-    if not settings.has_kite_credentials():
-        typer.echo("KITE_API_KEY / KITE_ACCESS_TOKEN missing; cannot sync.")
+    from crude_research.auth.token import has_current_access_token
+
+    if not has_current_access_token(settings):
+        typer.echo("AUTHENTICATION_REQUIRED: Kite session is missing or expired; cannot sync.")
         raise typer.Exit(code=1)
     try:
         records = _load_master(settings, force=force)
@@ -425,7 +438,7 @@ def instruments_sync(
         )
 
         typer.echo(format_kite_exception(exc), err=True)
-        if type(exc).__name__ == "TokenException":
+        if type(exc).__name__ == "TokenException" or type(exc).__name__ == "AuthenticationRequiredError":
             for hint in token_exception_hints(
                 settings.kite_api_key,
                 settings.kite_access_token,
