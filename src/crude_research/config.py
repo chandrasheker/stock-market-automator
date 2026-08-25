@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     kite_api_key: str | None = None
     kite_access_token: str | None = None
+    kite_api_secret: str | None = None
     data_dir: Path = Path("./data")
     timezone: str = "Asia/Kolkata"
     risk_free_rate: float | None = None
@@ -43,6 +44,7 @@ class Settings(BaseSettings):
     @field_validator(
         "kite_api_key",
         "kite_access_token",
+        "kite_api_secret",
         "risk_free_rate",
         mode="before",
     )

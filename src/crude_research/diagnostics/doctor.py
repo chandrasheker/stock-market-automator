@@ -151,7 +151,13 @@ def run_doctor(settings: Settings, *, try_network: bool = True) -> DoctorReport:
         report.add("kite_connectivity", False, detail)
         log.error("Kite connectivity failed: %s", detail)
         if type(exc).__name__ == "TokenException" or "token" in str(exc).lower():
-            report.hints.extend(token_exception_hints(settings.kite_api_key, settings.kite_access_token))
+            report.hints.extend(
+                token_exception_hints(
+                    settings.kite_api_key,
+                    settings.kite_access_token,
+                    settings.kite_api_secret,
+                )
+            )
         _inspect_cached_master(report, settings, required=False)
         return report
 

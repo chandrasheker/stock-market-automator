@@ -32,6 +32,8 @@ instruments_app = typer.Typer(no_args_is_help=True, help="Instrument master comm
 chain_app = typer.Typer(no_args_is_help=True, help="Option-chain research commands.")
 app.add_typer(instruments_app, name="instruments")
 app.add_typer(chain_app, name="chain")
+kite_app = typer.Typer(no_args_is_help=True, help="Kite session helpers (no order placement).")
+app.add_typer(kite_app, name="kite")
 
 log = logging.getLogger(__name__)
 
@@ -233,6 +235,69 @@ def doctor() -> None:
         raise typer.Exit(code=1)
 
 
+@kite_app.command("login-url")
+def kite_login_url() -> None:
+    """Print the official Kite Connect browser login URL. Does not open a browser."""
+    settings = _settings()
+    if not settings.kite_api_key:
+        typer.echo("Set KITE_API_KEY in .env first.", err=True)
+        raise typer.Exit(code=1)
+    from crude_research.zerodha.session import login_url
+
+    url = login_url(settings.kite_api_key)
+    typer.echo(url)
+    typer.echo("")
+    typer.echo("1. Open that URL, log in with Kite (password/PIN/TOTP in the browser).")
+    typer.echo("2. After redirect, copy request_token from the URL query string.")
+    typer.echo("3. python -m crude_research.cli kite session --request-token REQUEST_TOKEN")
+
+
+@kite_app.command("session")
+def kite_session(
+    request_token: Annotated[str, typer.Option("--request-token", help="From the Kite login redirect URL.")],
+    write_env: Annotated[bool, typer.Option("--write-env/--no-write-env", help="Update .env KITE_ACCESS_TOKEN.")] = True,
+) -> None:
+    """Exchange request_token + api_secret for today's access_token. No orders."""
+    from crude_research.config import clear_settings_cache
+    from crude_research.diagnostics.kite_auth import mask_secret, upsert_env_value
+    from crude_research.zerodha.session import exchange_request_token
+
+    settings = _settings()
+    if not settings.kite_api_key:
+        typer.echo("KITE_API_KEY is missing.", err=True)
+        raise typer.Exit(code=1)
+    if not settings.kite_api_secret:
+        typer.echo(
+            "KITE_API_SECRET is missing. Put the developers-console api_secret there "
+            "(not in KITE_ACCESS_TOKEN).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        payload = exchange_request_token(
+            api_key=settings.kite_api_key,
+            api_secret=settings.kite_api_secret,
+            request_token=request_token.strip(),
+        )
+    except Exception as exc:
+        from crude_research.diagnostics.kite_auth import format_kite_exception
+
+        typer.echo(format_kite_exception(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    access_token = str(payload["access_token"])
+    user_id = payload.get("user_id")
+    typer.echo(f"user_id: {user_id}")
+    typer.echo(f"access_token fingerprint: {mask_secret(access_token)}")
+    if write_env:
+        env_path = Path.cwd() / ".env"
+        upsert_env_value(env_path, "KITE_ACCESS_TOKEN", access_token)
+        clear_settings_cache()
+        typer.echo(f"Wrote KITE_ACCESS_TOKEN to {env_path} (file is gitignored).")
+        typer.echo("Re-run: python -m crude_research.cli doctor")
+    else:
+        typer.echo("Paste the access_token into .env yourself (not printed here).")
+
+
 @instruments_app.command("sync")
 def instruments_sync(
     force: Annotated[bool, typer.Option("--force", help="Re-download even if today's cache exists.")] = False,
@@ -252,7 +317,11 @@ def instruments_sync(
 
         typer.echo(format_kite_exception(exc), err=True)
         if type(exc).__name__ == "TokenException":
-            for hint in token_exception_hints(settings.kite_api_key, settings.kite_access_token):
+            for hint in token_exception_hints(
+                settings.kite_api_key,
+                settings.kite_access_token,
+                settings.kite_api_secret,
+            ):
                 typer.echo(f"  - {hint}", err=True)
         raise typer.Exit(code=1) from exc
     crude = sum(1 for row in records if row.underlying and row.underlying.value == "CRUDEOIL")

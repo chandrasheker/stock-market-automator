@@ -52,7 +52,8 @@ source venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e ".[dev]"
 cp .env.example .env
-# then edit .env: KITE_API_KEY, KITE_ACCESS_TOKEN, RISK_FREE_RATE
+# then edit .env: KITE_API_KEY, KITE_API_SECRET, RISK_FREE_RATE
+# KITE_ACCESS_TOKEN is minted daily via: python -m crude_research.cli kite session
 ```
 
 Confirm the install:
@@ -77,13 +78,21 @@ Set in `.env` (never commit real values):
 
 ```text
 KITE_API_KEY=
+KITE_API_SECRET=
 KITE_ACCESS_TOKEN=
 DATA_DIR=./data
 TIMEZONE=Asia/Kolkata
 RISK_FREE_RATE=
 ```
 
-This project **does not** automate Kite login (no password, PIN, TOTP, or browser automation). You must supply a valid **daily** access token.
+This project **does not** automate Kite login (no password, PIN, TOTP, or browser automation). `KITE_API_SECRET` is only used to exchange a one-time `request_token` for today's `access_token`:
+
+```bash
+python -m crude_research.cli kite login-url
+# open the printed URL, log in in the browser, copy request_token from the redirect
+python -m crude_research.cli kite session --request-token REQUEST_TOKEN
+python -m crude_research.cli doctor
+```
 
 If credentials are missing:
 
@@ -98,7 +107,7 @@ QUOTE_BATCH_SIZE=500          # Kite /quote limit; do not raise above 500
 STALE_QUOTE_SECONDS=120
 IV_VOL_LOWER=0.000001
 IV_VOL_UPPER=5.0              # 500% vol search cap
-OPTION_EXPIRY_TIME=23:30:00   # explicit assumption; see §12
+OPTION_EXPIRY_TIME=23:30:00   # explicit assumption; see §14
 ```
 
 ## 6. Instrument sync
@@ -128,7 +137,7 @@ Lot sizes, strike intervals, and tokens are taken from Zerodha metadata. They ar
 ```bash
 python -m crude_research.cli chain snapshot \
   --underlying CRUDEOILM \
-  --expiry 2026-10-16 \
+  --expiry 2026-10-15 \
   --risk-free-rate 0.065
 ```
 
@@ -143,7 +152,7 @@ Existing snapshot files are never overwritten.
 Watch (FULL-mode websocket; illiquid strikes may not tick):
 
 ```bash
-python -m crude_research.cli chain watch --underlying CRUDEOILM --expiry 2026-10-16
+python -m crude_research.cli chain watch --underlying CRUDEOILM --expiry 2026-10-15
 ```
 
 ## 8. Black-76 model
@@ -242,11 +251,18 @@ On this dump, CRUDEOILM option last-trading-days were `2026-09-17`, `2026-10-15`
 
 Fix:
 
-1. Open https://developers.kite.trade/ → your app → copy **api_key** (not api_secret) into `KITE_API_KEY`.
-2. Complete the [login flow](https://kite.trade/docs/connect/v3/user/#login-flow) and put today's **access_token** from `generate_session` into `KITE_ACCESS_TOKEN`.
-3. No quotes: `KITE_ACCESS_TOKEN=xxxxxxxx` not `"xxxxxxxx"`.
-4. Re-run `python -m crude_research.cli doctor`.
-5. Then snapshot with a listed expiry, e.g. `2026-10-15` if that is what `instruments expiries CRUDEOILM` printed.
+1. Open https://developers.kite.trade/ → your app → copy **api_key** (16 chars) into `KITE_API_KEY`.
+2. Copy **api_secret** (32 chars) into `KITE_API_SECRET` — never into `KITE_ACCESS_TOKEN`.
+3. Create today's access_token (no password automation in this repo):
+
+```bash
+python -m crude_research.cli kite login-url
+# open the printed URL, log in in the browser, copy request_token from the redirect
+python -m crude_research.cli kite session --request-token REQUEST_TOKEN
+python -m crude_research.cli doctor
+```
+
+4. Snapshot with a listed expiry, e.g. `2026-10-15` if that is what `instruments expiries CRUDEOILM` printed.
 
 Today's instrument cache can still be read when the token is dead (`instruments expiries` worked from Parquet). **Live quotes still need a valid daily token.**
 
