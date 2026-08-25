@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import crude_research
 from crude_research.config import Settings
 from crude_research.diagnostics.kite_auth import (
     describe_settings_load,
@@ -93,6 +94,25 @@ def _inspect_cached_master(report: DoctorReport, settings: Settings, *, required
         report.add("mcx_instrument_master", False, f"{type(exc).__name__}: {exc}")
 
 
+def _note_unrelated_pypi_kite(report: DoctorReport) -> None:
+    """Warn if the unrelated PyPI project named `kite` is installed (not kiteconnect)."""
+    import importlib.metadata as metadata
+
+    try:
+        dist = metadata.distribution("kite")
+    except metadata.PackageNotFoundError:
+        return
+    report.add(
+        "kite_debug",
+        True,
+        (
+            f"unrelated PyPI package 'kite' {dist.version} is installed "
+            "(not Zerodha). Uninstall: python -m pip uninstall kite"
+        ),
+    )
+    log.warning("Unrelated PyPI package 'kite' %s is installed; uninstall it", dist.version)
+
+
 def run_doctor(settings: Settings, *, try_network: bool = True) -> DoctorReport:
     report = DoctorReport()
     version = sys.version_info
@@ -111,6 +131,13 @@ def run_doctor(settings: Settings, *, try_network: bool = True) -> DoctorReport:
         report.add("data_dir_writable", True, str(data_dir.resolve()))
     except OSError as exc:
         report.add("data_dir_writable", False, str(exc))
+
+    report.add(
+        "package_version",
+        True,
+        f"{crude_research.__version__}  {Path(crude_research.__file__).resolve()}",
+    )
+    _note_unrelated_pypi_kite(report)
 
     creds = settings.has_kite_credentials()
     report.add(

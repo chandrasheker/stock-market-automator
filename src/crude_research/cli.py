@@ -10,6 +10,7 @@ from typing import Annotated
 
 import typer
 
+from crude_research import __version__
 from crude_research.config import Settings, get_settings
 from crude_research.diagnostics.doctor import run_doctor
 from crude_research.exceptions import CrudeResearchError
@@ -36,6 +37,28 @@ kite_app = typer.Typer(no_args_is_help=True, help="Kite session helpers (no orde
 app.add_typer(kite_app, name="kite")
 
 log = logging.getLogger(__name__)
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"crude-research {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show package version and exit.",
+        ),
+    ] = False,
+) -> None:
+    """MCX CRUDEOIL/CRUDEOILM research CLI (market data + Black-76 only)."""
+    del version
 
 
 def _settings() -> Settings:

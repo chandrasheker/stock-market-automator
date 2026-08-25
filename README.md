@@ -107,7 +107,7 @@ QUOTE_BATCH_SIZE=500          # Kite /quote limit; do not raise above 500
 STALE_QUOTE_SECONDS=120
 IV_VOL_LOWER=0.000001
 IV_VOL_UPPER=5.0              # 500% vol search cap
-OPTION_EXPIRY_TIME=23:30:00   # explicit assumption; see §14
+OPTION_EXPIRY_TIME=23:30:00   # explicit assumption; see §15
 ```
 
 ## 6. Instrument sync
@@ -168,7 +168,7 @@ P = e^{−rT} [ K N(−d2) − F N(−d1) ]
 ```
 
 `F` is the mapped futures research price (mid when valid; otherwise `LTP_FALLBACK`, never silently relabelled as mid).
-`T` is an exact timezone-aware year fraction (see §12). `r` is the configured continuously compounded rate stored on every greeks row.
+`T` is an exact timezone-aware year fraction (see §15). `r` is the configured continuously compounded rate stored on every greeks row.
 
 ### Greek units
 
@@ -238,7 +238,36 @@ Use a real option expiry from `instruments expiries`, not the placeholder `YYYY-
 
 On this dump, CRUDEOILM option last-trading-days were `2026-09-17`, `2026-10-15`, `2026-11-17` — **not** `2026-10-16` (that is near the October *futures* expiry `2026-10-19`). MCX options expire two business days before the futures last trading day.
 
-## 13. Troubleshooting: `TokenException`
+## 13. Troubleshooting: `No such command 'kite'`
+
+That error means the Python process is running an **old** `crude_research.cli` (before the session helper). `pip install kite` is the wrong fix: it installs an unrelated PyPI project (`kite` 0.2.x from kitelang), not Zerodha and not this CLI. Zerodha’s library is **`kiteconnect`**, already a project dependency.
+
+```bash
+# Keep secrets in .env (gitignored). Discard local edits to the example file:
+git restore .env.example
+git pull origin cursor/mcx-crude-quant-foundation-636b
+
+python -m pip uninstall -y kite    # only the unrelated kitelang package
+python -m pip install -e ".[dev]"
+
+python -c "import crude_research; print(crude_research.__version__, crude_research.__file__)"
+python -m crude_research.cli --version
+python -m crude_research.cli --help
+```
+
+You want **`crude-research 0.1.1`** (or newer) and `--help` listing `doctor`, `instruments`, `chain`, and **`kite`**. Then:
+
+```bash
+python -m crude_research.cli kite login-url
+# log in in the browser; copy the real request_token from the redirect URL
+# (not the literal placeholder REQUEST_TOKEN)
+python -m crude_research.cli kite session --request-token PASTE_TOKEN_HERE
+python -m crude_research.cli doctor
+```
+
+Stay on `cursor/mcx-crude-quant-foundation-636b`. Do not switch to other feature branches for this CLI.
+
+## 14. Troubleshooting: `TokenException`
 
 `kite_credentials: present` only means `.env` has non-empty strings. Kite still rejects them when:
 
@@ -266,7 +295,7 @@ python -m crude_research.cli doctor
 
 Today's instrument cache can still be read when the token is dead (`instruments expiries` worked from Parquet). **Live quotes still need a valid daily token.**
 
-## 14. Known assumptions and limitations
+## 15. Known assumptions and limitations
 
 ### Option-to-futures mapping
 

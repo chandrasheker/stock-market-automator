@@ -12,13 +12,31 @@ from tests.unit.test_chain import _mini_quotes, _now
 
 
 def test_doctor_offline() -> None:
+    from crude_research import __version__
+
     report = run_doctor(Settings(_env_file=None), try_network=False)
     names = {c.name for c in report.checks}
     assert "python_version" in names
     assert "kite_credentials" in names
+    assert "package_version" in names
     joined = " ".join(c.detail for c in report.checks)
     assert "KITE_API_KEY" in joined
     assert "<empty>" in joined
+    assert __version__ in joined
+
+
+def test_cli_help_lists_kite_and_version() -> None:
+    from typer.testing import CliRunner
+
+    from crude_research import __version__
+    from crude_research.cli import app
+
+    help_result = CliRunner().invoke(app, ["--help"])
+    assert help_result.exit_code == 0
+    assert "kite" in help_result.stdout
+    version_result = CliRunner().invoke(app, ["--version"])
+    assert version_result.exit_code == 0
+    assert __version__ in version_result.stdout
 
 
 def test_mask_never_prints_full_secret() -> None:
@@ -52,3 +70,21 @@ def test_table_mentions_not_a_recommendation() -> None:
     assert "not a trading recommendation" in table.lower()
     assert "8000" in table
     assert "CRUDEOILM26OCTFUT" in table
+
+
+def test_doctor_notes_unrelated_pypi_kite(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import importlib.metadata as metadata
+
+    class _Dist:
+        version = "0.2.3"
+
+    def _distribution(name: str) -> object:
+        if name == "kite":
+            return _Dist()
+        raise metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(metadata, "distribution", _distribution)
+    report = run_doctor(Settings(_env_file=None), try_network=False)
+    joined = " ".join(c.detail for c in report.checks)
+    assert "unrelated PyPI package 'kite' 0.2.3" in joined
+    assert "pip uninstall kite" in joined
