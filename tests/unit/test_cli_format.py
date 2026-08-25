@@ -34,6 +34,7 @@ def test_cli_help_lists_kite_and_version() -> None:
     help_result = CliRunner().invoke(app, ["--help"])
     assert help_result.exit_code == 0
     assert "kite" in help_result.stdout
+    assert "serve" in help_result.stdout
     version_result = CliRunner().invoke(app, ["--version"])
     assert version_result.exit_code == 0
     assert __version__ in version_result.stdout

@@ -9,6 +9,7 @@ def test_missing_credentials_still_construct(monkeypatch) -> None:  # type: igno
     monkeypatch.delenv("KITE_API_KEY", raising=False)
     monkeypatch.delenv("KITE_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("KITE_API_SECRET", raising=False)
+    monkeypatch.delenv("SMA_BASE_URL", raising=False)
     monkeypatch.delenv("RISK_FREE_RATE", raising=False)
     settings = Settings(_env_file=None)
     assert settings.has_kite_credentials() is False
@@ -32,7 +33,9 @@ def test_strips_quoted_credentials(monkeypatch) -> None:  # type: ignore[no-unty
     monkeypatch.setenv("KITE_API_KEY", '  "abcKEY12xyz"  ')
     monkeypatch.setenv("KITE_ACCESS_TOKEN", "'tok_value_here_ok'")
     monkeypatch.setenv("KITE_API_SECRET", '  "sec_value_here_ok"  ')
+    monkeypatch.setenv("SMA_BASE_URL", "https://sma.example/")
     settings = Settings(_env_file=None)
     assert settings.kite_api_key == "abcKEY12xyz"
     assert settings.kite_access_token == "tok_value_here_ok"
     assert settings.kite_api_secret == "sec_value_here_ok"
+    assert settings.sma_base_url == "https://sma.example"

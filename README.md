@@ -97,6 +97,15 @@ python -m crude_research.cli kite session --request-token <value-from-redirect>
 python -m crude_research.cli doctor
 ```
 
+SMA HTTP (official browser login; no Selenium/OTP automation). Register
+`${SMA_BASE_URL}/auth/zerodha/callback` on https://developers.kite.trade, then:
+
+```bash
+# .env: KITE_API_KEY, KITE_API_SECRET, SMA_BASE_URL=https://sma.example
+python -m crude_research.cli serve --host 127.0.0.1 --port 8000
+# open /auth/zerodha in a browser, complete Kite login
+```
+
 If credentials are missing:
 
 * unit tests still run

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     kite_api_key: str | None = None
     kite_access_token: str | None = None
     kite_api_secret: str | None = None
+    sma_base_url: str | None = None
     data_dir: Path = Path("./data")
     timezone: str = "Asia/Kolkata"
     risk_free_rate: float | None = None
@@ -45,6 +46,7 @@ class Settings(BaseSettings):
         "kite_api_key",
         "kite_access_token",
         "kite_api_secret",
+        "sma_base_url",
         "risk_free_rate",
         mode="before",
     )
@@ -60,6 +62,13 @@ class Settings(BaseSettings):
                 return None
             return cleaned
         return value
+
+    @field_validator("sma_base_url", mode="after")
+    @classmethod
+    def _strip_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.rstrip("/")
 
     @model_validator(mode="after")
     def _vol_bounds_ordered(self) -> Self:

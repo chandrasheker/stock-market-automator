@@ -285,6 +285,32 @@ def doctor() -> None:
         raise typer.Exit(code=1)
 
 
+@app.command("serve")
+def serve(
+    host: Annotated[str, typer.Option("--host", help="Bind address.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Bind port.")] = 8000,
+) -> None:
+    """Run SMA HTTP: official Kite browser login, callback, and status."""
+    import uvicorn
+
+    from crude_research.http.app import create_app
+
+    settings = _settings()
+    if not settings.kite_api_key or not settings.kite_api_secret:
+        typer.echo("KITE_API_KEY and KITE_API_SECRET are required to serve.", err=True)
+        raise typer.Exit(code=1)
+    if not settings.sma_base_url:
+        typer.echo(
+            "SMA_BASE_URL is required. Register "
+            "${SMA_BASE_URL}/auth/zerodha/callback at https://developers.kite.trade",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    typer.echo(f"SMA listening on http://{host}:{port}")
+    typer.echo(f"Zerodha callback: {settings.sma_base_url}/auth/zerodha/callback")
+    uvicorn.run(create_app(settings), host=host, port=port)
+
+
 @kite_app.command("login-url")
 def kite_login_url() -> None:
     """Print the official Kite Connect browser login URL. Does not open a browser."""
