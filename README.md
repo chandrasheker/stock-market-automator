@@ -41,12 +41,34 @@ Do not treat chain tables or IV as trade recommendations.
 
 Python **3.12+**. Windows and Linux. No Docker required.
 
+The library lives under `src/`. **`python -m crude_research.cli` will fail with `ModuleNotFoundError` until the package is installed into the same interpreter you are using** (your `venv`, not a different Python).
+
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-source .venv/bin/activate
-pip install -e ".[dev]"
+python -m venv venv
+# Windows Git Bash / Linux:
+source venv/bin/activate
+# Windows cmd: venv\Scripts\activate
+
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
 cp .env.example .env
+# then edit .env: KITE_API_KEY, KITE_ACCESS_TOKEN, RISK_FREE_RATE
+```
+
+Confirm the install:
+
+```bash
+python -c "import crude_research; print(crude_research.__version__)"
+python -m crude_research.cli doctor
+```
+
+If you cannot install yet, either set `PYTHONPATH=src` or use the repo launcher:
+
+```bash
+export PYTHONPATH=src          # Git Bash; PowerShell: $env:PYTHONPATH="src"
+python -m crude_research.cli doctor
+# or
+python run.py doctor
 ```
 
 ## 5. Zerodha credential requirements
@@ -81,11 +103,15 @@ OPTION_EXPIRY_TIME=23:30:00   # explicit assumption; see §12
 
 ## 6. Instrument sync
 
+After `python -m pip install -e ".[dev]"` (see §4):
+
 ```bash
 python -m crude_research.cli doctor
 python -m crude_research.cli instruments sync
 python -m crude_research.cli instruments expiries CRUDEOILM
 ```
+
+`YYYY-MM-DD` in examples is a placeholder. Use a real expiry from `instruments expiries`.
 
 The MCX master is refreshed **once per calendar session date** in `TIMEZONE` and cached at:
 
@@ -188,7 +214,20 @@ mypy
 pytest
 ```
 
-## 12. Known assumptions and limitations
+## 12. Troubleshooting: `No module named 'crude_research'`
+
+The CLI is a package under `src/crude_research`. Copying `.env.example` is not enough; the active venv must have the project installed:
+
+```bash
+source venv/bin/activate          # you already do this
+python -m pip install -e ".[dev]"
+python -c "import crude_research; print('ok', crude_research.__version__)"
+python -m crude_research.cli doctor
+```
+
+Use a real option expiry from `instruments expiries`, not the placeholder `YYYY-MM-DD`.
+
+## 13. Known assumptions and limitations
 
 ### Option-to-futures mapping
 
